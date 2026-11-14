@@ -1,0 +1,56 @@
+version = 1
+name = "default-windows-sandbox"
+
+[architecture]
+# Target execution isolation:
+#   "strict_native" — allow only binaries matching the host Wardline distribution (0x8664 on x64, pure 0xAA64 on ARM64)
+#   "allow_arm64ec" — on ARM64, allow pure ARM64 (0xAA64) and ARM64EC (0xA641)
+#   "allow_prism_x64" — on ARM64, explicitly permit x64 binaries running under Prism emulation (suppresses ACG on child)
+mode = "strict_native"
+
+[execution]
+# L0 RestrictedJob | L1 AppContainerBox | L2 MicroVM
+isolation = "L1"
+working_dir = "."
+inherit_env = false
+allowed_env = ["PATH", "SystemRoot", "TEMP", "TMP"]
+deny_scripts = true
+deny_lolbins = true
+timeout_ms = 30000
+max_memory_mb = 512
+max_processes = 16
+cpu_rate_percent = 50
+acg = true
+cet_shadow_stack = true
+
+[filesystem]
+workspace_read = ["."]
+workspace_write = []
+denied_prefixes = [
+    "C:\\Windows\\System32\\config",
+    "\\\\?\\",
+    "\\\\",
+]
+
+[network]
+egress_mode = "proxy_only"
+allow_ipv6 = false
+allow_private_ips = false
+allow_metadata_ips = false
+allowed_destinations = [
+    "https://api.github.com/**",
+]
+
+[credentials]
+allowed_grants = []
+max_bytes_per_request = 1048576
+
+[approvals]
+require_on_write = true
+require_on_network_post = true
+default_ttl_secs = 300
+
+[audit]
+log_path = ".wardline/audit.wlog"
+lock_mode = "exclusive_blocking"
+seal_interval_events = 64

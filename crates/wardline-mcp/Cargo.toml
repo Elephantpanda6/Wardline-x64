@@ -1,0 +1,21 @@
+[package]
+name = "wardline-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "wardline-mcp"
+path = "src/main.rs"
+
+[dependencies]
+wardline-core.workspace = true
+wardline-cert.workspace = true
+wardline-guard.workspace = true
+base64.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+uuid.workspace = true

@@ -1,0 +1,16 @@
+[package]
+name = "wardline-cert"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wardline-core.workspace = true
+ed25519-dalek.workspace = true
+ciborium.workspace = true
+redb.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+rand.workspace = true
+uuid.workspace = true
+zeroize.workspace = true

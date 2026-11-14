@@ -1,0 +1,11 @@
+# Wardline build outputs and local state
+/target/
+/zig-out/
+/.zig-cache/
+**/*.rs.bk
+*.pdb
+*.tmp
+*.wlog
+*.redb
+.wardline/
+wardline-local.toml

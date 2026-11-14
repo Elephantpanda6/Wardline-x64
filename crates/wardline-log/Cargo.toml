@@ -1,0 +1,15 @@
+[package]
+name = "wardline-log"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wardline-core.workspace = true
+blake3.workspace = true
+ciborium.workspace = true
+ed25519-dalek.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+hex.workspace = true
+windows-sys.workspace = true

@@ -1,0 +1,6 @@
+[project]
+name = "wardline-client"
+version = "0.1.0"
+description = "Thin Python SDK for the Wardline Windows capability runtime"
+requires-python = ">=3.11"
+dependencies = []

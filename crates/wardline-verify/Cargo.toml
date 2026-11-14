@@ -1,0 +1,17 @@
+[package]
+name = "wardline-verify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "wardline-verify"
+path = "src/main.rs"
+
+[dependencies]
+wardline-core.workspace = true
+wardline-log.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+hex.workspace = true
+serde_json.workspace = true

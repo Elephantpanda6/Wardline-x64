@@ -1,0 +1,73 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/wardline-core",
+    "crates/wardline-policy",
+    "crates/wardline-cert",
+    "crates/wardline-approval",
+    "crates/wardline-log",
+    "crates/wardline-verify",
+    "crates/wardline-vault",
+    "crates/wardline-egress",
+    "crates/wardline-sandbox",
+    "crates/wardline-guard",
+    "crates/wardline-mcp",
+    "crates/wardline-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+wardline-core = { path = "crates/wardline-core" }
+wardline-policy = { path = "crates/wardline-policy" }
+wardline-cert = { path = "crates/wardline-cert" }
+wardline-approval = { path = "crates/wardline-approval" }
+wardline-log = { path = "crates/wardline-log" }
+wardline-verify = { path = "crates/wardline-verify" }
+wardline-vault = { path = "crates/wardline-vault" }
+wardline-egress = { path = "crates/wardline-egress" }
+wardline-sandbox = { path = "crates/wardline-sandbox" }
+wardline-guard = { path = "crates/wardline-guard" }
+wardline-mcp = { path = "crates/wardline-mcp" }
+
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+ciborium = "0.2"
+blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
+ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
+chacha20poly1305 = "0.10"
+zeroize = { version = "1", features = ["derive"] }
+rand = "0.8"
+redb = "2"
+clap = { version = "4", features = ["derive", "env"] }
+hex = "0.4"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4", "serde"] }
+url = "2"
+httparse = "1"
+native-tls = "0.2"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_IO",
+    "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = "symbols"
+panic = "abort"
