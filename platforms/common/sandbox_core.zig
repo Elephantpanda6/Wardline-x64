@@ -387,6 +387,7 @@ pub fn executeIsolatedChild(
     acg_applied: bool,
 ) u32 {
     res.* = std.mem.zeroes(common.WlSpawnResult);
+    res.struct_size = @sizeOf(common.WlSpawnResult);
     res.emulation_detected = if (emulation_detected) 1 else 0;
     res.acg_applied = if (acg_applied) 1 else 0;
 
@@ -404,7 +405,7 @@ pub fn executeIsolatedChild(
     const ro_slice = if (req.ro_paths_utf8) |p| p[0..req.ro_paths_len] else "";
     const ac_name_slice = if (req.container_name_utf8) |p| p[0..req.container_name_len] else "wardline.sandbox.default";
 
-    const use_appcontainer = req.isolation_level == @intFromEnum(common.WlIsolationLevel.l1_appcontainer);
+    const use_appcontainer = req.isolation_level >= @intFromEnum(common.WlIsolationLevel.l1_appcontainer);
     const exe_w = utf8ToWideZ(exe_slice) catch return failResult(io, res, .invalid_arg, 0, "invalid executable UTF-8");
     defer alloc.free(exe_w);
     const cmd_w = utf8ToWideZ(cmd_slice) catch return failResult(io, res, .invalid_arg, 0, "invalid cmdline UTF-8");

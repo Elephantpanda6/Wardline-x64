@@ -40,480 +40,47 @@ pub struct BrokerWriteResult {
     pub bytes_written: usize,
 }
 
-#[derive(Debug, Clone)]
-struct ResolvedRoot {
-    lexical: String,
-    canonical: String,
+use wardline_platform::fs_safe::ResolvedRoot;
+
+impl From<wardline_platform::PlatformError> for BrokerError {
+    fn from(err: wardline_platform::PlatformError) -> Self {
+        match err {
+            wardline_platform::PlatformError::ReparseBlocked(m) => Self::ReparseBlocked(m),
+            wardline_platform::PlatformError::Io(e) => Self::Io(e),
+            other => Self::Denied(other.to_string()),
+        }
+    }
 }
 
-#[cfg(windows)]
 mod os_broker {
     use std::fs::File;
-    use std::os::windows::ffi::OsStrExt;
-    use std::os::windows::io::FromRawHandle;
-    use std::path::{Component, Path, PathBuf};
+    use std::path::{Path, PathBuf};
 
-    use wardline_core::path::normalize_windows_lexical_path;
-    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE};
-    use windows_sys::Win32::Storage::FileSystem::{
-        CreateFileW, GetFileInformationByHandle, GetFinalPathNameByHandleW,
-        BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
-        FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
-        FILE_SHARE_WRITE, OPEN_ALWAYS, OPEN_EXISTING, VOLUME_NAME_DOS,
-    };
+    use wardline_platform::fs_safe::{self, PinnedDir, ResolvedRoot};
 
-    use super::{is_host_prefix_match, BrokerError, ResolvedRoot};
-
-    pub type PinnedDir = OwnedHandle;
-
-    pub struct OwnedHandle(pub HANDLE);
-
-    impl Drop for OwnedHandle {
-        fn drop(&mut self) {
-            if self.0 != INVALID_HANDLE_VALUE && !self.0.is_null() {
-                unsafe {
-                    let _ = CloseHandle(self.0);
-                }
-            }
-        }
-    }
-
-    fn to_wide_z(path: &Path) -> Vec<u16> {
-        path.as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect()
-    }
-
-    fn open_no_follow(path: &Path, desired_access: u32) -> Result<OwnedHandle, BrokerError> {
-        let wpath = to_wide_z(path);
-        let h = unsafe {
-            CreateFileW(
-                wpath.as_ptr(),
-                desired_access,
-                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                std::ptr::null(),
-                OPEN_EXISTING,
-                FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
-                std::ptr::null_mut(),
-            )
-        };
-        if h == INVALID_HANDLE_VALUE {
-            return Err(BrokerError::Io(std::io::Error::from_raw_os_error(
-                unsafe { GetLastError() } as i32,
-            )));
-        }
-        Ok(OwnedHandle(h))
-    }
-
-    fn assert_handle_not_reparse(h: HANDLE, label: &Path) -> Result<(), BrokerError> {
-        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-        let ok = unsafe { GetFileInformationByHandle(h, &mut info) };
-        if ok == 0 {
-            return Err(BrokerError::Io(std::io::Error::from_raw_os_error(
-                unsafe { GetLastError() } as i32,
-            )));
-        }
-        if (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
-            return Err(BrokerError::ReparseBlocked(format!(
-                "component '{}' is an NTFS reparse point / junction / symlink",
-                label.display()
-            )));
-        }
-        Ok(())
-    }
-
-    fn final_dos_path_from_handle(h: HANDLE) -> Result<String, BrokerError> {
-        let mut buf = vec![0u16; 1024];
-        let len = unsafe {
-            GetFinalPathNameByHandleW(h, buf.as_mut_ptr(), buf.len() as u32, VOLUME_NAME_DOS)
-        };
-        if len == 0 {
-            return Err(BrokerError::Io(std::io::Error::from_raw_os_error(
-                unsafe { GetLastError() } as i32,
-            )));
-        }
-        let len = len as usize;
-        if len >= buf.len() {
-            buf.resize(len + 1, 0);
-            let len2 = unsafe {
-                GetFinalPathNameByHandleW(h, buf.as_mut_ptr(), buf.len() as u32, VOLUME_NAME_DOS)
-            };
-            if len2 == 0 || (len2 as usize) >= buf.len() {
-                return Err(BrokerError::Denied("final path resolution overflow".into()));
-            }
-            buf.truncate(len2 as usize);
-        } else {
-            buf.truncate(len);
-        }
-        let raw = String::from_utf16_lossy(&buf);
-        let stripped = raw.strip_prefix(r"\\?\").unwrap_or(&raw);
-        normalize_windows_lexical_path(stripped).map_err(|e| BrokerError::Denied(e.to_string()))
-    }
+    use super::BrokerError;
 
     pub fn resolve_existing_final_path(path: &Path) -> Result<String, BrokerError> {
-        let h = open_no_follow(path, FILE_READ_ATTRIBUTES)?;
-        assert_handle_not_reparse(h.0, path)?;
-        final_dos_path_from_handle(h.0)
+        Ok(fs_safe::resolve_existing_final_path(path)?)
     }
 
     pub fn canonicalize_existing_path_no_follow(path: &Path) -> Result<PathBuf, BrokerError> {
-        let mut cur = PathBuf::new();
-        for comp in path.components() {
-            match comp {
-                Component::Prefix(p) => cur.push(p.as_os_str()),
-                Component::RootDir => cur.push(Component::RootDir.as_os_str()),
-                Component::CurDir => {}
-                Component::ParentDir => {
-                    cur.pop();
-                }
-                Component::Normal(part) => {
-                    cur.push(part);
-                    if cur.exists() || cur.symlink_metadata().is_ok() {
-                        let ah = open_no_follow(&cur, FILE_READ_ATTRIBUTES)?;
-                        assert_handle_not_reparse(ah.0, &cur)?;
-                    }
-                }
-            }
-        }
-        let h = open_no_follow(path, FILE_READ_ATTRIBUTES)?;
-        assert_handle_not_reparse(h.0, path)?;
-        let final_str = final_dos_path_from_handle(h.0)?;
-        Ok(PathBuf::from(final_str))
+        Ok(fs_safe::canonicalize_existing_path_no_follow(path)?)
     }
 
     pub fn verify_no_reparse_from_root(root: &Path, target: &Path) -> Result<(), BrokerError> {
-        let rel = target.strip_prefix(root).map_err(|_| {
-            BrokerError::Denied(format!(
-                "target '{}' not lexically inside root '{}'",
-                target.display(),
-                root.display()
-            ))
-        })?;
-
-        let root_h = open_no_follow(root, FILE_READ_ATTRIBUTES)?;
-        assert_handle_not_reparse(root_h.0, root)?;
-
-        let mut cur = root.to_path_buf();
-        for comp in rel.components() {
-            match comp {
-                Component::CurDir => continue,
-                Component::Normal(part) => {
-                    cur.push(part);
-                    if cur.exists() || cur.symlink_metadata().is_ok() {
-                        let h = open_no_follow(&cur, FILE_READ_ATTRIBUTES)?;
-                        assert_handle_not_reparse(h.0, &cur)?;
-                    }
-                }
-                _ => {
-                    return Err(BrokerError::Denied(
-                        "unexpected non-normal path component after normalization".into(),
-                    ));
-                }
-            }
-        }
-        Ok(())
+        Ok(fs_safe::verify_no_reparse_from_root(root, target)?)
     }
 
     pub fn open_dir_pin_no_delete(path: &Path) -> Result<(PinnedDir, String), BrokerError> {
-        let wpath = to_wide_z(path);
-        let h = unsafe {
-            CreateFileW(
-                wpath.as_ptr(),
-                FILE_READ_ATTRIBUTES,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                std::ptr::null(),
-                OPEN_EXISTING,
-                FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
-                std::ptr::null_mut(),
-            )
-        };
-        if h == INVALID_HANDLE_VALUE {
-            return Err(BrokerError::Io(std::io::Error::from_raw_os_error(
-                unsafe { GetLastError() } as i32,
-            )));
-        }
-        let owned = OwnedHandle(h);
-        assert_handle_not_reparse(owned.0, path)?;
-        let final_parent = final_dos_path_from_handle(owned.0)?;
-        Ok((owned, final_parent))
+        Ok(fs_safe::open_dir_pin_no_delete(path)?)
     }
 
     pub fn open_read_verified(
         candidate_pb: &Path,
         allowed_roots: &[ResolvedRoot],
     ) -> Result<(File, String), BrokerError> {
-        let h = open_no_follow(candidate_pb, 0x8000_0000)?;
-        assert_handle_not_reparse(h.0, candidate_pb)?;
-        let final_path = final_dos_path_from_handle(h.0)?;
-        if !allowed_roots
-            .iter()
-            .any(|r| is_host_prefix_match(&final_path, &r.canonical))
-        {
-            return Err(BrokerError::Denied(format!(
-                "resolved volume path '{final_path}' escaped workspace roots"
-            )));
-        }
-        let file = unsafe { File::from_raw_handle(h.0 as _) };
-        std::mem::forget(h);
-        Ok((file, final_path))
-    }
-
-    pub fn open_write_verified(
-        _parent_pin: &PinnedDir,
-        canonical_target: &Path,
-        candidate_pb: &Path,
-        write_roots: &[ResolvedRoot],
-    ) -> Result<(File, String), BrokerError> {
-        const GENERIC_WRITE_MASK: u32 = 0x4000_0000;
-        let wpath = to_wide_z(canonical_target);
-        let h = unsafe {
-            CreateFileW(
-                wpath.as_ptr(),
-                GENERIC_WRITE_MASK | FILE_READ_ATTRIBUTES,
-                FILE_SHARE_READ,
-                std::ptr::null(),
-                OPEN_ALWAYS,
-                FILE_FLAG_OPEN_REPARSE_POINT,
-                std::ptr::null_mut(),
-            )
-        };
-        if h == INVALID_HANDLE_VALUE {
-            return Err(BrokerError::Io(std::io::Error::from_raw_os_error(
-                unsafe { GetLastError() } as i32,
-            )));
-        }
-        let target_h = OwnedHandle(h);
-        assert_handle_not_reparse(target_h.0, candidate_pb)?;
-        let final_target = final_dos_path_from_handle(target_h.0)?;
-        if !write_roots
-            .iter()
-            .any(|r| is_host_prefix_match(&final_target, &r.canonical))
-        {
-            return Err(BrokerError::Denied(format!(
-                "resolved target '{final_target}' escaped workspace_write"
-            )));
-        }
-        let file = unsafe { File::from_raw_handle(target_h.0 as _) };
-        std::mem::forget(target_h);
-        Ok((file, final_target))
-    }
-}
-
-#[cfg(unix)]
-mod os_broker {
-    use std::ffi::CString;
-    use std::fs::File;
-    use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::io::{FromRawFd, RawFd};
-    use std::path::{Component, Path, PathBuf};
-
-    use wardline_core::path::normalize_posix_lexical_path;
-
-    use super::{is_host_prefix_match, BrokerError, ResolvedRoot};
-
-    pub struct OwnedFd(pub RawFd);
-
-    impl Drop for OwnedFd {
-        fn drop(&mut self) {
-            if self.0 >= 0 {
-                unsafe {
-                    let _ = libc::close(self.0);
-                }
-            }
-        }
-    }
-
-    pub type PinnedDir = OwnedFd;
-
-    fn path_to_cstr(p: &Path) -> Result<CString, BrokerError> {
-        CString::new(p.as_os_str().as_bytes())
-            .map_err(|_| BrokerError::Denied("embedded NUL in path".into()))
-    }
-
-    fn os_err_or_reparse(err: std::io::Error, label: &Path) -> BrokerError {
-        if err.raw_os_error() == Some(libc::ELOOP) {
-            BrokerError::ReparseBlocked(format!(
-                "component '{}' is a POSIX symlink (ELOOP blocked)",
-                label.display()
-            ))
-        } else {
-            BrokerError::Io(err)
-        }
-    }
-
-    fn open_no_follow(path: &Path, flags: libc::c_int) -> Result<OwnedFd, BrokerError> {
-        let cpath = path_to_cstr(path)?;
-        let fd = unsafe { libc::open(cpath.as_ptr(), flags | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
-        if fd < 0 {
-            return Err(os_err_or_reparse(std::io::Error::last_os_error(), path));
-        }
-        Ok(OwnedFd(fd))
-    }
-
-    fn assert_fd_not_symlink(fd: RawFd, label: &Path) -> Result<libc::stat, BrokerError> {
-        let mut st: libc::stat = unsafe { std::mem::zeroed() };
-        if unsafe { libc::fstat(fd, &mut st) } != 0 {
-            return Err(BrokerError::Io(std::io::Error::last_os_error()));
-        }
-        if (st.st_mode & libc::S_IFMT) == libc::S_IFLNK {
-            return Err(BrokerError::ReparseBlocked(format!(
-                "component '{}' is a symlink",
-                label.display()
-            )));
-        }
-        Ok(st)
-    }
-
-    fn final_path_from_fd(fd: RawFd, fallback_hint: &Path) -> Result<String, BrokerError> {
-        let st = assert_fd_not_symlink(fd, fallback_hint)?;
-        #[cfg(target_os = "linux")]
-        let resolved_pb = std::fs::read_link(format!("/proc/self/fd/{fd}"))?;
-
-        #[cfg(target_os = "macos")]
-        let resolved_pb = {
-            let mut buf = vec![0u8; libc::PATH_MAX as usize];
-            let rc = unsafe { libc::fcntl(fd, libc::F_GETPATH, buf.as_mut_ptr()) };
-            if rc < 0 {
-                return Err(BrokerError::Io(std::io::Error::last_os_error()));
-            }
-            let nul = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-            PathBuf::from(String::from_utf8_lossy(&buf[..nul]).into_owned())
-        };
-
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        let resolved_pb = std::fs::canonicalize(fallback_hint)?;
-
-        let c_res = path_to_cstr(&resolved_pb)?;
-        let mut lst: libc::stat = unsafe { std::mem::zeroed() };
-        if unsafe { libc::lstat(c_res.as_ptr(), &mut lst) } != 0 {
-            return Err(BrokerError::Io(std::io::Error::last_os_error()));
-        }
-        if lst.st_dev != st.st_dev || lst.st_ino != st.st_ino {
-            return Err(BrokerError::ReparseBlocked(format!(
-                "open handle inode mismatch for '{}'",
-                resolved_pb.display()
-            )));
-        }
-        normalize_posix_lexical_path(&resolved_pb.to_string_lossy())
-            .map_err(|e| BrokerError::Denied(e.to_string()))
-    }
-
-    pub fn resolve_existing_final_path(path: &Path) -> Result<String, BrokerError> {
-        let fd = open_no_follow(path, libc::O_RDONLY)?;
-        final_path_from_fd(fd.0, path)
-    }
-
-    pub fn canonicalize_existing_path_no_follow(path: &Path) -> Result<PathBuf, BrokerError> {
-        let mut cur = PathBuf::new();
-        for comp in path.components() {
-            match comp {
-                Component::RootDir => cur.push("/"),
-                Component::CurDir => {}
-                Component::ParentDir => {
-                    cur.pop();
-                }
-                Component::Normal(part) => {
-                    cur.push(part);
-                    if let Ok(meta) = std::fs::symlink_metadata(&cur) {
-                        if meta.file_type().is_symlink() {
-                            return Err(BrokerError::ReparseBlocked(format!(
-                                "component '{}' is a POSIX symlink",
-                                cur.display()
-                            )));
-                        }
-                    }
-                }
-                Component::Prefix(_) => {}
-            }
-        }
-        let fd = open_no_follow(path, libc::O_RDONLY)?;
-        let final_str = final_path_from_fd(fd.0, path)?;
-        Ok(PathBuf::from(final_str))
-    }
-
-    pub fn verify_no_reparse_from_root(root: &Path, target: &Path) -> Result<(), BrokerError> {
-        let rel = target.strip_prefix(root).map_err(|_| {
-            BrokerError::Denied(format!(
-                "target '{}' not lexically inside root '{}'",
-                target.display(),
-                root.display()
-            ))
-        })?;
-
-        let mut dir_fd = open_no_follow(root, libc::O_RDONLY | libc::O_DIRECTORY)?;
-        let comps: Vec<_> = rel
-            .components()
-            .filter_map(|c| match c {
-                Component::Normal(p) => Some(p),
-                _ => None,
-            })
-            .collect();
-        for (idx, part) in comps.iter().enumerate() {
-            let cname = CString::new(part.as_bytes())
-                .map_err(|_| BrokerError::Denied("embedded NUL in path segment".into()))?;
-            let is_last = idx + 1 == comps.len();
-            let mut st: libc::stat = unsafe { std::mem::zeroed() };
-            let rc = unsafe {
-                libc::fstatat(dir_fd.0, cname.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW)
-            };
-            if rc != 0 {
-                let err = std::io::Error::last_os_error();
-                if err.raw_os_error() == Some(libc::ENOENT) {
-                    continue;
-                }
-                return Err(BrokerError::Io(err));
-            }
-            if (st.st_mode & libc::S_IFMT) == libc::S_IFLNK {
-                return Err(BrokerError::ReparseBlocked(format!(
-                    "component '{}' inside '{}' is a POSIX symlink",
-                    Path::new(part).display(),
-                    root.display()
-                )));
-            }
-            if !is_last && (st.st_mode & libc::S_IFMT) == libc::S_IFDIR {
-                let next_fd = unsafe {
-                    libc::openat(
-                        dir_fd.0,
-                        cname.as_ptr(),
-                        libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-                    )
-                };
-                if next_fd < 0 {
-                    return Err(os_err_or_reparse(
-                        std::io::Error::last_os_error(),
-                        Path::new(part),
-                    ));
-                }
-                dir_fd = OwnedFd(next_fd);
-            }
-        }
-        Ok(())
-    }
-
-    pub fn open_dir_pin_no_delete(path: &Path) -> Result<(PinnedDir, String), BrokerError> {
-        let fd = open_no_follow(path, libc::O_RDONLY | libc::O_DIRECTORY)?;
-        let final_parent = final_path_from_fd(fd.0, path)?;
-        Ok((fd, final_parent))
-    }
-
-    pub fn open_read_verified(
-        candidate_pb: &Path,
-        allowed_roots: &[ResolvedRoot],
-    ) -> Result<(File, String), BrokerError> {
-        let fd = open_no_follow(candidate_pb, libc::O_RDONLY)?;
-        let final_path = final_path_from_fd(fd.0, candidate_pb)?;
-        if !allowed_roots
-            .iter()
-            .any(|r| is_host_prefix_match(&final_path, &r.canonical))
-        {
-            return Err(BrokerError::Denied(format!(
-                "resolved path '{final_path}' escaped workspace roots"
-            )));
-        }
-        let file = unsafe { File::from_raw_fd(fd.0) };
-        std::mem::forget(fd);
-        Ok((file, final_path))
+        Ok(fs_safe::open_read_verified(candidate_pb, allowed_roots)?)
     }
 
     pub fn open_write_verified(
@@ -522,38 +89,12 @@ mod os_broker {
         candidate_pb: &Path,
         write_roots: &[ResolvedRoot],
     ) -> Result<(File, String), BrokerError> {
-        let file_name = canonical_target
-            .file_name()
-            .ok_or_else(|| BrokerError::Denied("missing target file name".into()))?;
-        let cname = CString::new(file_name.as_bytes())
-            .map_err(|_| BrokerError::Denied("embedded NUL in file name".into()))?;
-        let fd_num = unsafe {
-            libc::openat(
-                parent_pin.0,
-                cname.as_ptr(),
-                libc::O_WRONLY | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-                0o600,
-            )
-        };
-        if fd_num < 0 {
-            return Err(os_err_or_reparse(
-                std::io::Error::last_os_error(),
-                candidate_pb,
-            ));
-        }
-        let target_fd = OwnedFd(fd_num);
-        let final_target = final_path_from_fd(target_fd.0, canonical_target)?;
-        if !write_roots
-            .iter()
-            .any(|r| is_host_prefix_match(&final_target, &r.canonical))
-        {
-            return Err(BrokerError::Denied(format!(
-                "resolved target '{final_target}' escaped workspace_write"
-            )));
-        }
-        let file = unsafe { File::from_raw_fd(target_fd.0) };
-        std::mem::forget(target_fd);
-        Ok((file, final_target))
+        Ok(fs_safe::open_write_verified(
+            parent_pin,
+            canonical_target,
+            candidate_pb,
+            write_roots,
+        )?)
     }
 }
 

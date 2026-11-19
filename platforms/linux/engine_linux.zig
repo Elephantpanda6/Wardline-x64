@@ -79,6 +79,22 @@ fn parseKernelVersionNumber() u32 {
     return maj * 10000 + min * 100 + pat;
 }
 
+fn fileExistsZ(path_z: [*:0]const u8) bool {
+    return c.access(path_z, 0) == 0;
+}
+
+fn probeCgroupV2() u8 {
+    return if (fileExistsZ("/sys/fs/cgroup/cgroup.controllers")) 1 else 0;
+}
+
+fn probeRunsc() bool {
+    return fileExistsZ("/usr/bin/runsc") or fileExistsZ("/usr/local/bin/runsc");
+}
+
+fn probeFirecracker() bool {
+    return fileExistsZ("/usr/bin/firecracker") or fileExistsZ("/usr/local/bin/firecracker");
+}
+
 fn probeLandlockAbi() c_int {
     const rc = linux.syscall3(.landlock_create_ruleset, 0, 0, LANDLOCK_CREATE_RULESET_VERSION);
     const signed: isize = @bitCast(rc);
@@ -207,7 +223,13 @@ fn addLandlockPathRule(rs_fd: c_int, path_z: [*:0]const u8, dir_access: u64, fil
 
 fn applyLandlock(ctx: *const px.PreExecContext) px.PreExecResult {
     const abi = probeLandlockAbi();
-    if (abi < 1) return .{}; // Graceful on pre-5.13 kernels without Landlock.
+    if (abi < 1) {
+        return .{
+            .status = .isolation_unavailable,
+            .errno_val = 0,
+            .detail = "Landlock ABI >= 1 is mandatory for Linux L1 isolation",
+        };
+    }
 
     var handled: u64 = LL_EXEC | LL_WRITE_FILE | LL_READ_FILE | LL_READ_DIR | LL_REMOVE_DIR |
         LL_REMOVE_FILE | LL_MAKE_CHAR | LL_MAKE_DIR | LL_MAKE_REG | LL_MAKE_SOCK |
@@ -278,7 +300,34 @@ fn applyLandlock(ctx: *const px.PreExecContext) px.PreExecResult {
     return .{};
 }
 
-fn applySeccomp() px.PreExecResult {
+const DENIED_SECCOMP_SYSCALLS = [_]linux.SYS{
+    .ptrace,
+    .process_vm_readv,
+    .process_vm_writev,
+    .mount,
+    .umount2,
+    .kexec_load,
+    .init_module,
+    .finit_module,
+    .bpf,
+    .io_uring_setup,
+    .keyctl,
+    .chroot,
+    .pivot_root,
+    .unshare,
+    .setns,
+    .open_tree,
+    .move_mount,
+    .fsopen,
+    .fsconfig,
+    .fsmount,
+    .fspick,
+    .mount_setattr,
+};
+
+const SECCOMP_FILTER_LEN = 3 + 1 + DENIED_SECCOMP_SYSCALLS.len + 6 + 3;
+
+pub fn buildSeccompFilter(arch_const: u32) [SECCOMP_FILTER_LEN]SockFilter {
     const BPF_LD: u16 = 0x00;
     const BPF_W: u16 = 0x00;
     const BPF_ABS: u16 = 0x20;
@@ -286,11 +335,6 @@ fn applySeccomp() px.PreExecResult {
     const BPF_JEQ: u16 = 0x10;
     const BPF_K: u16 = 0x00;
     const BPF_RET: u16 = 0x06;
-
-    const arch_const: u32 = if (builtin.cpu.arch == .aarch64)
-        0xC000_00B7
-    else
-        0xC000_003E;
 
     const off_arch: u32 = @offsetOf(linux.SECCOMP.data, "arch");
     const off_nr: u32 = @offsetOf(linux.SECCOMP.data, "nr");
@@ -301,44 +345,81 @@ fn applySeccomp() px.PreExecResult {
     const ret_eacces: u32 = linux.SECCOMP.RET.ERRNO | 13;
     const ret_eperm: u32 = linux.SECCOMP.RET.ERRNO | 1;
 
-    const filter = [_]SockFilter{
-        // 0: load arch
-        bpfStmt(BPF_LD | BPF_W | BPF_ABS, off_arch),
-        // 1: if arch == native -> skip kill (jump +1)
-        bpfJump(BPF_JMP | BPF_JEQ | BPF_K, arch_const, 1, 0),
-        // 2: kill foreign arch
-        bpfStmt(BPF_RET | BPF_K, ret_kill),
-        // 3: load nr
-        bpfStmt(BPF_LD | BPF_W | BPF_ABS, off_nr),
-        // 4: check dangerous syscalls -> jump to EPERM (idx 21, diff from 4..14 is 16..6)
-        bpfJump(BPF_JMP | BPF_JEQ | BPF_K, sysNum(.ptrace), 16, 0),
-        bpfJump(BPF_JMP | BPF_JEQ | BPF_K, sysNum(.process_vm_readv), 15, 0),
-        bpfJump(BPF_JMP | BPF_JEQ | BPF_K, sysNum(.process_vm_writev), 14, 0),
-        bpfJump(BPF_JMP | BPF_JEQ | BPF_K, sysNum(.mount), 13, 0),
-        bpfJump(BPF_JMP | BPF_JEQ | BPF_K, sysNum(.umount2), 12, 0),
-        bpfJump(BPF_JMP | BPF_JEQ | BPF_K, sysNum(.kexec_load), 11, 0),
-        bpfJump(BPF_JMP | BPF_JEQ | BPF_K, sysNum(.init_module), 10, 0),
-        bpfJump(BPF_JMP | BPF_JEQ | BPF_K, sysNum(.finit_module), 9, 0),
-        bpfJump(BPF_JMP | BPF_JEQ | BPF_K, sysNum(.bpf), 8, 0),
-        bpfJump(BPF_JMP | BPF_JEQ | BPF_K, sysNum(.io_uring_setup), 7, 0),
-        bpfJump(BPF_JMP | BPF_JEQ | BPF_K, sysNum(.keyctl), 6, 0),
-        // 15: check socket -> if not socket jump to ALLOW (idx 22, jf = 6)
-        bpfJump(BPF_JMP | BPF_JEQ | BPF_K, sysNum(.socket), 0, 6),
-        // 16: load socket arg0 (domain)
-        bpfStmt(BPF_LD | BPF_W | BPF_ABS, off_arg0),
-        // 17..20: block AF_INET(2), AF_INET6(10), AF_NETLINK(16), AF_PACKET(17)
-        bpfJump(BPF_JMP | BPF_JEQ | BPF_K, 2, 5, 0),
-        bpfJump(BPF_JMP | BPF_JEQ | BPF_K, 10, 4, 0),
-        bpfJump(BPF_JMP | BPF_JEQ | BPF_K, 16, 3, 0),
-        bpfJump(BPF_JMP | BPF_JEQ | BPF_K, 17, 2, 1),
-        // 21: EPERM
-        bpfStmt(BPF_RET | BPF_K, ret_eperm),
-        // 22: ALLOW
-        bpfStmt(BPF_RET | BPF_K, ret_allow),
-        // 23: EACCES
-        bpfStmt(BPF_RET | BPF_K, ret_eacces),
-    };
+    var f: [SECCOMP_FILTER_LEN]SockFilter = undefined;
+    f[0] = bpfStmt(BPF_LD | BPF_W | BPF_ABS, off_arch);
+    f[1] = bpfJump(BPF_JMP | BPF_JEQ | BPF_K, arch_const, 1, 0);
+    f[2] = bpfStmt(BPF_RET | BPF_K, ret_kill);
+    f[3] = bpfStmt(BPF_LD | BPF_W | BPF_ABS, off_nr);
 
+    const n = DENIED_SECCOMP_SYSCALLS.len;
+    const sock_idx = 4 + n;
+    const eperm_idx = sock_idx + 6;
+    const allow_idx = eperm_idx + 1;
+    const eacces_idx = eperm_idx + 2;
+
+    for (DENIED_SECCOMP_SYSCALLS, 0..) |sys_id, k| {
+        const idx = 4 + k;
+        f[idx] = bpfJump(
+            BPF_JMP | BPF_JEQ | BPF_K,
+            @intCast(@intFromEnum(sys_id)),
+            @intCast(eperm_idx - (idx + 1)),
+            0,
+        );
+    }
+
+    f[sock_idx] = bpfJump(
+        BPF_JMP | BPF_JEQ | BPF_K,
+        sysNum(.socket),
+        0,
+        @intCast(allow_idx - (sock_idx + 1)),
+    );
+    f[sock_idx + 1] = bpfStmt(BPF_LD | BPF_W | BPF_ABS, off_arg0);
+    f[sock_idx + 2] = bpfJump(BPF_JMP | BPF_JEQ | BPF_K, 2, @intCast(eacces_idx - (sock_idx + 3)), 0);
+    f[sock_idx + 3] = bpfJump(BPF_JMP | BPF_JEQ | BPF_K, 10, @intCast(eacces_idx - (sock_idx + 4)), 0);
+    f[sock_idx + 4] = bpfJump(BPF_JMP | BPF_JEQ | BPF_K, 16, @intCast(eacces_idx - (sock_idx + 5)), 0);
+    f[sock_idx + 5] = bpfJump(
+        BPF_JMP | BPF_JEQ | BPF_K,
+        17,
+        @intCast(eacces_idx - (sock_idx + 6)),
+        @intCast(allow_idx - (sock_idx + 6)),
+    );
+    f[eperm_idx] = bpfStmt(BPF_RET | BPF_K, ret_eperm);
+    f[allow_idx] = bpfStmt(BPF_RET | BPF_K, ret_allow);
+    f[eacces_idx] = bpfStmt(BPF_RET | BPF_K, ret_eacces);
+    return f;
+}
+
+fn evalBpfFilterForTest(filter: []const SockFilter, arch: u32, nr: u32, arg0: u32) u32 {
+    const off_arch: u32 = @offsetOf(linux.SECCOMP.data, "arch");
+    const off_nr: u32 = @offsetOf(linux.SECCOMP.data, "nr");
+    const off_arg0: u32 = @offsetOf(linux.SECCOMP.data, "arg0");
+    var acc: u32 = 0;
+    var pc: usize = 0;
+    while (pc < filter.len) {
+        const insn = filter[pc];
+        switch (insn.code) {
+            0x20 => { // BPF_LD | BPF_W | BPF_ABS
+                acc = if (insn.k == off_arch) arch else if (insn.k == off_nr) nr else if (insn.k == off_arg0) arg0 else 0;
+                pc += 1;
+            },
+            0x15 => { // BPF_JMP | BPF_JEQ | BPF_K
+                const delta: usize = if (acc == insn.k) insn.jt else insn.jf;
+                pc += 1 + delta;
+            },
+            0x06 => return insn.k, // BPF_RET | BPF_K
+            else => unreachable,
+        }
+    }
+    unreachable;
+}
+
+fn applySeccomp() px.PreExecResult {
+    const arch_const: u32 = if (builtin.cpu.arch == .aarch64)
+        0xC000_00B7
+    else
+        0xC000_003E;
+
+    const filter = buildSeccompFilter(arch_const);
     const prog = SockFprog{
         .len = filter.len,
         .filter = &filter,
@@ -417,11 +498,14 @@ export fn wl_classify_pe(bytes_ptr: ?[*]const u8, bytes_len: usize) callconv(.c)
 }
 
 export fn wl_probe_capabilities(out_caps: ?*common.WlHostCapabilities) callconv(.c) u32 {
-    const caps = out_caps orelse return @intFromEnum(common.WlStatusCode.invalid_arg);
+    const caps = common.validateCapsPtr(out_caps) orelse return @intFromEnum(common.WlStatusCode.invalid_arg);
     const psize = px.pageSize();
-    const kvm_ok: u8 = if (c.access("/dev/kvm", 0) == 0) 1 else 0;
+    const kvm_ok: u8 = if (fileExistsZ("/dev/kvm")) 1 else 0;
     const ll_abi = probeLandlockAbi();
     const userns_ok = probeUsernsEnabled();
+    const cgroup_ok = probeCgroupV2();
+    const runsc_ok = probeRunsc();
+    const fc_ok = probeFirecracker();
 
     var pac_bti: u8 = 0;
     var cet: u8 = 0;
@@ -446,19 +530,39 @@ export fn wl_probe_capabilities(out_caps: ?*common.WlHostCapabilities) callconv(
         cet = probeX64CetCpuinfo();
     }
 
+    const l1_ok = userns_ok and ll_abi >= 1;
+    var tier_mask: u32 = common.WL_TIER_BIT_L0;
+    if (l1_ok) tier_mask |= common.WL_TIER_BIT_L1;
+    if (runsc_ok) tier_mask |= common.WL_TIER_BIT_L1_5;
+    if (kvm_ok != 0 and fc_ok) tier_mask |= common.WL_TIER_BIT_L2;
+
+    var feat: u64 = common.WL_FEAT_SECCOMP_BPF;
+    if (ll_abi >= 1) feat |= common.WL_FEAT_LANDLOCK;
+    if (userns_ok) feat |= common.WL_FEAT_USERNS;
+    if (cgroup_ok != 0) feat |= common.WL_FEAT_CGROUP_V2;
+    if (runsc_ok) feat |= common.WL_FEAT_GVISOR_RUNSC;
+    if (fc_ok) feat |= common.WL_FEAT_FIRECRACKER;
+    if (kvm_ok != 0) feat |= common.WL_FEAT_KVM;
+
     caps.* = .{
-        .arch = wl_engine_arch(),
+        .struct_size = @sizeOf(common.WlHostCapabilities),
         .abi_version = common.abi_version,
+        .arch = wl_engine_arch(),
+        .os_build_number = parseKernelVersionNumber(),
+        .page_size = psize,
+        .tier_support_mask = tier_mask,
+        .feature_flags = feat,
         .is_wow64_emulated = 0,
         .cet_shadow_stack_supported = cet,
         .pac_bti_available = pac_bti,
         .hyperv_hcs_available = kvm_ok,
-        .appcontainer_supported = if (userns_ok and ll_abi >= 0) 1 else if (userns_ok) 1 else 0,
+        .appcontainer_supported = if (l1_ok) 1 else 0,
         .job_object_iocp_supported = 1,
         .os_kind = @intFromEnum(common.WlOsKind.linux),
         .arm64_ext_flags = ext_flags,
-        .os_build_number = parseKernelVersionNumber(),
-        .page_size = psize,
+        .landlock_abi = if (ll_abi > 0) @intCast(@min(ll_abi, 255)) else 0,
+        .cgroup_v2_available = cgroup_ok,
+        .reserved = @splat(0),
     };
     return @intFromEnum(common.WlStatusCode.ok);
 }
@@ -497,12 +601,17 @@ export fn wl_spawn_isolated(
     const io = io_opt orelse return @intFromEnum(common.WlStatusCode.invalid_arg);
     const res = res_opt orelse return @intFromEnum(common.WlStatusCode.invalid_arg);
 
+    if (!common.validateSpawnReq(req, io, res)) {
+        return res.status_code;
+    }
+
     const exe_slice = if (req.executable_utf8) |p| p[0..req.executable_len] else "";
     const bin_info = px.inspectExecutableOnDisk(exe_slice);
     const host_arch: common.WlArch = if (builtin.cpu.arch == .aarch64) .arm64 else .x64;
     const eval = evaluateLinuxSpawnPolicy(bin_info, host_arch, req.allow_prism_x64 != 0);
     if (eval.status != .ok) {
         res.* = std.mem.zeroes(common.WlSpawnResult);
+        res.struct_size = @sizeOf(common.WlSpawnResult);
         res.emulation_detected = if (eval.emulation) 1 else 0;
         common.writeDetail(io, res, eval.detail);
         res.status_code = @intFromEnum(eval.status);
@@ -536,4 +645,18 @@ export fn wl_set_owner_only_dacl_utf8(
 export fn wl_harden_current_process_dacl(out_win32_err: ?*u32) callconv(.c) u32 {
     const e = out_win32_err orelse return @intFromEnum(common.WlStatusCode.invalid_arg);
     return px.hardenProcessCommon(e);
+}
+
+test "seccomp-bpf filter validates native arch, mount API blocks, and socket families" {
+    const arch_const: u32 = if (builtin.cpu.arch == .aarch64) 0xC000_00B7 else 0xC000_003E;
+    const f = buildSeccompFilter(arch_const);
+    try std.testing.expectEqual(linux.SECCOMP.RET.KILL_PROCESS, evalBpfFilterForTest(&f, 0xDEAD_BEEF, sysNum(.read), 0));
+    try std.testing.expectEqual(linux.SECCOMP.RET.ALLOW, evalBpfFilterForTest(&f, arch_const, sysNum(.read), 0));
+    try std.testing.expectEqual(linux.SECCOMP.RET.ALLOW, evalBpfFilterForTest(&f, arch_const, sysNum(.socket), 1));
+    for (DENIED_SECCOMP_SYSCALLS) |s| {
+        try std.testing.expectEqual(linux.SECCOMP.RET.ERRNO | 1, evalBpfFilterForTest(&f, arch_const, @intCast(@intFromEnum(s)), 0));
+    }
+    for ([_]u32{ 2, 10, 16, 17 }) |fam| {
+        try std.testing.expectEqual(linux.SECCOMP.RET.ERRNO | 13, evalBpfFilterForTest(&f, arch_const, sysNum(.socket), fam));
+    }
 }

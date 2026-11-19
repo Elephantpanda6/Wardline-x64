@@ -7,15 +7,21 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use uuid::Uuid;
 use wardline_approval::{compute_bound_action_digest, ApprovalStore};
-use wardline_cert::{verify_cert_chain, CrlStore, WardCertChain};
+use wardline_cert::{verify_cert_chain_with_revocations, CrlStore, RevocationList, WardCertChain};
 use wardline_core::binary::{inspect_binary_file, BinaryFormat};
 use wardline_core::capability::{host_matches_pattern, parse_canonical_destination, CapabilityScope};
 use wardline_core::path::{is_host_prefix_match, normalize_host_lexical_path, validate_safe_host_path};
-use wardline_core::{ActionRequest, ArchExecutionMode, Decision, NetMethod, TargetArch, TargetOs};
-use wardline_egress::{execute_egress_request, EgressError, EgressRequest};
-use wardline_log::{AuditEvent, WalWriter};
-use wardline_policy::{evaluate_action, CompiledPolicy, ExecContext};
-use wardline_sandbox::{engine_identity, probe_capabilities, spawn_isolated, EngineStatus, SpawnConfig};
+use wardline_core::{
+    ActionRequest, ArchExecutionMode, Decision, IsolationLevel, NetMethod, TargetArch, TargetOs,
+};
+use wardline_egress::{execute_egress_request_with_budgets, BudgetStore, EgressError, EgressRequest};
+use wardline_log::{compute_argv_digest_hex, AuditEvent, WalWriter};
+use wardline_policy::manifest::WorkspaceMode;
+use wardline_policy::{evaluate_action_explained, CompiledPolicy, ExecContext, SessionState};
+use wardline_sandbox::{
+    engine_identity, probe_capabilities, select_backend_for_tier, EngineStatus, SandboxInitError,
+    SpawnConfig,
+};
 use wardline_vault::{StreamingScrubber, VaultStore};
 
 #[cfg(windows)]
@@ -118,6 +124,22 @@ fn resolve_working_dir(
     canonicalize_if_exists(candidate)
 }
 
+fn fixed_system_path_dirs() -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        let sys_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+        vec![PathBuf::from(sys_root).join("System32")]
+    }
+    #[cfg(unix)]
+    {
+        let mut dirs = vec![PathBuf::from("/usr/bin"), PathBuf::from("/bin")];
+        if cfg!(target_os = "macos") {
+            dirs.push(PathBuf::from("/opt/homebrew/bin"));
+        }
+        dirs
+    }
+}
+
 fn resolve_executable_with_origin(raw: &str, working_dir: &Path) -> Result<(PathBuf, bool), String> {
     validate_safe_host_path(raw).map_err(|e| e.to_string())?;
     let p = Path::new(raw);
@@ -127,6 +149,7 @@ fn resolve_executable_with_origin(raw: &str, working_dir: &Path) -> Result<(Path
     if raw.contains(['\\', '/']) {
         return Ok((canonicalize_if_exists(working_dir.join(p))?, true));
     }
+    // Reject CWD binary shadowing of bare command names before searching fixed OS system PATH.
     let local = working_dir.join(p);
     if local.is_file() {
         return Ok((canonicalize_if_exists(local)?, true));
@@ -138,22 +161,72 @@ fn resolve_executable_with_origin(raw: &str, working_dir: &Path) -> Result<(Path
             return Ok((canonicalize_if_exists(local_exe)?, true));
         }
     }
-    if let Ok(path_var) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&path_var) {
-            let direct = dir.join(raw);
-            if direct.is_file() {
-                return Ok((canonicalize_if_exists(direct)?, false));
-            }
-            #[cfg(windows)]
-            if p.extension().is_none() {
-                let with_exe = dir.join(format!("{raw}.exe"));
-                if with_exe.is_file() {
-                    return Ok((canonicalize_if_exists(with_exe)?, false));
-                }
+    // Bare executable names resolve ONLY against fixed OS system directories
+    // (never untrusted user PATH).
+    for dir in fixed_system_path_dirs() {
+        let direct = dir.join(raw);
+        if direct.is_file() {
+            return Ok((canonicalize_if_exists(direct)?, false));
+        }
+        #[cfg(windows)]
+        if p.extension().is_none() {
+            let with_exe = dir.join(format!("{raw}.exe"));
+            if with_exe.is_file() {
+                return Ok((canonicalize_if_exists(with_exe)?, false));
             }
         }
     }
-    Ok((local, true))
+    Err(format!(
+        "bare executable '{raw}' not found in fixed OS system PATH (CWD & user PATH ignored)"
+    ))
+}
+
+struct SessionWorkspaceCopy {
+    dir: PathBuf,
+}
+
+impl SessionWorkspaceCopy {
+    fn create_from(src: &Path) -> std::io::Result<Self> {
+        let dst = std::env::temp_dir().join(format!(
+            "wardline_sess_{}_{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dst)?;
+        if src.is_dir() {
+            copy_dir_no_symlinks(src, &dst)?;
+        }
+        Ok(Self { dir: dst })
+    }
+}
+
+impl Drop for SessionWorkspaceCopy {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn copy_dir_no_symlinks(src: &Path, dst: &Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name == ".wardline" || name == ".git" || name == "target" {
+            continue;
+        }
+        let s_path = entry.path();
+        let meta = std::fs::symlink_metadata(&s_path)?;
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        let d_path = dst.join(name);
+        if meta.is_dir() {
+            std::fs::create_dir_all(&d_path)?;
+            copy_dir_no_symlinks(&s_path, &d_path)?;
+        } else if meta.is_file() {
+            std::fs::copy(&s_path, &d_path)?;
+        }
+    }
+    Ok(())
 }
 
 fn anchor_scope_path(raw: &str, base_dir: &Path) -> Result<String, String> {
@@ -350,6 +423,9 @@ pub struct GuardRuntimeConfig {
     pub vault: Option<VaultStore>,
     pub approvals: Option<ApprovalStore>,
     pub crl: Option<CrlStore>,
+    pub revocation_list: Option<RevocationList>,
+    pub budgets: Option<BudgetStore>,
+    pub session_state: Option<SessionState>,
     pub wal: Option<WalWriter>,
     pub cert_root_pubkey: Option<[u8; 32]>,
     pub require_cert: bool,
@@ -357,6 +433,7 @@ pub struct GuardRuntimeConfig {
 
 pub struct GuardEngine {
     cfg: GuardRuntimeConfig,
+    session_id: String,
     session_counter: u64,
 }
 
@@ -368,13 +445,15 @@ impl Drop for GuardEngine {
 
 impl GuardEngine {
     pub fn new(cfg: GuardRuntimeConfig) -> Self {
+        let session_id = Uuid::new_v4().to_string();
         let engine = Self {
             cfg,
+            session_id: session_id.clone(),
             session_counter: 0,
         };
         let (arch, _) = engine_identity();
         engine.log_event(AuditEvent::SessionStarted {
-            session_id: Uuid::new_v4().to_string(),
+            session_id,
             policy_name: engine.cfg.policy.manifest.name.clone(),
             distro: arch.distro_tag().to_string(),
         });
@@ -385,12 +464,63 @@ impl GuardEngine {
         &self.cfg.policy
     }
 
+    pub fn set_isolation_override(&mut self, isolation: IsolationLevel) {
+        self.cfg.policy.manifest.execution.isolation = isolation;
+    }
+
     fn log_event(&self, event: AuditEvent) {
         if let Some(ref wal) = self.cfg.wal {
             if let Err(e) = wal.append(unix_now_ms(), event) {
                 eprintln!("wardline-guard: WAL append failed: {e}");
             }
         }
+    }
+
+    /// Writes and fsyncs an `ActionIntent` frame BEFORE any OS, filesystem, or network side effect.
+    /// Fails closed if the WAL is frozen/tainted or encounters an I/O error.
+    fn record_intent(
+        &self,
+        action: &str,
+        argv_digest_hex: &str,
+        isolation: &str,
+    ) -> Result<String, GuardResponse> {
+        let action_id = Uuid::new_v4().to_string();
+        if let Some(ref wal) = self.cfg.wal {
+            if let Err(e) = wal.append(
+                unix_now_ms(),
+                AuditEvent::ActionIntent {
+                    action_id: action_id.clone(),
+                    session_id: self.session_id.clone(),
+                    action: action.to_string(),
+                    argv_digest_hex: argv_digest_hex.to_string(),
+                    isolation: isolation.to_string(),
+                },
+            ) {
+                return Err(GuardResponse::denied(
+                    format!("audit WAL intent write failed (fail-closed): {e}"),
+                    Some("Run 'wardline audit verify' or inspect '.tainted' killswitch marker.".into()),
+                ));
+            }
+        }
+        Ok(action_id)
+    }
+
+    fn record_outcome(
+        &self,
+        action_id: String,
+        action: &str,
+        decision: &str,
+        reason: &str,
+        exit_code: Option<u32>,
+    ) {
+        self.log_event(AuditEvent::ActionOutcome {
+            action_id,
+            session_id: self.session_id.clone(),
+            action: action.to_string(),
+            decision: decision.to_string(),
+            reason: reason.to_string(),
+            exit_code,
+        });
     }
 
     fn scrub_output(&self, raw: &[u8]) -> String {
@@ -424,8 +554,14 @@ impl GuardEngine {
             .cfg
             .cert_root_pubkey
             .ok_or_else(|| "WardCert presented but guard has no root authority pubkey".to_string())?;
-        let claim = verify_cert_chain(&root_pk, chain, self.cfg.crl.as_ref(), unix_now_secs())
-            .map_err(|e| format!("WardCert verification failed: {e}"))?;
+        let claim = verify_cert_chain_with_revocations(
+            &root_pk,
+            chain,
+            self.cfg.crl.as_ref(),
+            self.cfg.revocation_list.as_ref(),
+            unix_now_secs(),
+        )
+        .map_err(|e| format!("WardCert verification failed: {e}"))?;
         if self.cfg.policy.manifest.execution.isolation < claim.min_isolation {
             return Err(format!(
                 "WardCert requires at least {:?} isolation, policy is {:?}",
@@ -480,7 +616,10 @@ impl GuardEngine {
                         decision: "deny".into(),
                         reason: reason.clone(),
                     });
-                    return GuardResponse::Denied { reason };
+                    return GuardResponse::denied(
+                        reason,
+                        Some("Present a non-revoked WardCert chain signed by the configured authority.".into()),
+                    );
                 }
             }
             GuardRequest::Health | GuardRequest::CapabilityLearn => {}
@@ -542,9 +681,22 @@ impl GuardEngine {
             GuardRequest::BrokerFileRead {
                 path, max_bytes, ..
             } => {
+                let act = format!("fs_read:{path}");
+                let digest = compute_argv_digest_hex("fs_read", std::slice::from_ref(&path));
+                let action_id = match self.record_intent(&act, &digest, "host_broker") {
+                    Ok(id) => id,
+                    Err(resp) => return resp,
+                };
                 let limit = max_bytes.unwrap_or(1024 * 1024);
                 match broker_read(&self.cfg.policy, &self.cfg.base_dir, &path, limit) {
                     Ok(res) => {
+                        self.record_outcome(
+                            action_id,
+                            &act,
+                            "allow",
+                            "within workspace roots & reparse-verified",
+                            Some(0),
+                        );
                         self.log_event(AuditEvent::PolicyDecision {
                             action: format!("fs_read:{}", res.canonical_path),
                             decision: "allow".into(),
@@ -561,12 +713,16 @@ impl GuardEngine {
                         }
                     }
                     Err(BrokerError::Denied(r)) | Err(BrokerError::ReparseBlocked(r)) => {
+                        self.record_outcome(action_id, &act, "deny", &r, None);
                         self.log_event(AuditEvent::PolicyDecision {
-                            action: format!("fs_read:{path}"),
+                            action: act,
                             decision: "deny".into(),
                             reason: r.clone(),
                         });
-                        GuardResponse::Denied { reason: r }
+                        GuardResponse::denied(
+                            r,
+                            Some("Ensure path is inside [filesystem].workspace_read and symlink-free.".into()),
+                        )
                     }
                     Err(e) => GuardResponse::Error {
                         code: "broker_read_error".into(),
@@ -590,6 +746,12 @@ impl GuardEngine {
                         }
                     }
                 };
+                let act = format!("fs_write:{path}");
+                let digest = compute_argv_digest_hex("fs_write", std::slice::from_ref(&path));
+                let action_id = match self.record_intent(&act, &digest, "host_broker") {
+                    Ok(id) => id,
+                    Err(resp) => return resp,
+                };
                 match broker_write(
                     &self.cfg.policy,
                     &self.cfg.base_dir,
@@ -601,6 +763,13 @@ impl GuardEngine {
                     unix_now_secs(),
                 ) {
                     Ok(res) => {
+                        self.record_outcome(
+                            action_id,
+                            &act,
+                            "allow",
+                            "reparse-verified workspace write",
+                            Some(0),
+                        );
                         self.log_event(AuditEvent::PolicyDecision {
                             action: format!("fs_write:{}", res.canonical_path),
                             decision: "allow".into(),
@@ -621,8 +790,9 @@ impl GuardEngine {
                         scope_key,
                         reason,
                     }) => {
+                        self.record_outcome(action_id, &act, "require_approval", &reason, None);
                         self.log_event(AuditEvent::PolicyDecision {
-                            action: format!("fs_write:{path}"),
+                            action: act,
                             decision: "require_approval".into(),
                             reason: reason.clone(),
                         });
@@ -634,12 +804,16 @@ impl GuardEngine {
                         }
                     }
                     Err(BrokerError::Denied(r)) | Err(BrokerError::ReparseBlocked(r)) => {
+                        self.record_outcome(action_id, &act, "deny", &r, None);
                         self.log_event(AuditEvent::PolicyDecision {
-                            action: format!("fs_write:{path}"),
+                            action: act,
                             decision: "deny".into(),
                             reason: r.clone(),
                         });
-                        GuardResponse::Denied { reason: r }
+                        GuardResponse::denied(
+                            r,
+                            Some("Ensure path is inside [filesystem].workspace_write and obtain approval if required.".into()),
+                        )
                     }
                     Err(e) => GuardResponse::Error {
                         code: "broker_write_error".into(),
@@ -692,10 +866,75 @@ impl GuardEngine {
             decision: "deny".into(),
             reason: reason.clone(),
         });
-        GuardResponse::Denied { reason }
+        GuardResponse::denied(
+            reason,
+            Some(format!(
+                "Inspect policy via 'wardline policy show' or allow '{executable}' only if explicitly trusted."
+            )),
+        )
     }
 
     fn handle_run_tool(
+        &mut self,
+        executable: String,
+        args: Vec<String>,
+        working_dir: Option<String>,
+        env_overrides: Vec<(String, String)>,
+        cert_authorized: bool,
+        approval_ticket_id: Option<Uuid>,
+    ) -> GuardResponse {
+        let intent_act = format!("exec:{executable}");
+        let argv_digest = compute_argv_digest_hex(&executable, &args);
+        let action_id = match self.record_intent(
+            &intent_act,
+            &argv_digest,
+            self.cfg.policy.manifest.execution.isolation.as_str(),
+        ) {
+            Ok(id) => id,
+            Err(resp) => return resp,
+        };
+        let resp = self.handle_run_tool_inner(
+            executable,
+            args,
+            working_dir,
+            env_overrides,
+            cert_authorized,
+            approval_ticket_id,
+        );
+        match &resp {
+            GuardResponse::Ok { payload } => {
+                let code = payload
+                    .get("exit_code")
+                    .and_then(|v| v.as_u64())
+                    .and_then(|c| u32::try_from(c).ok());
+                self.record_outcome(
+                    action_id,
+                    &intent_act,
+                    "allow",
+                    "sandbox execution finished",
+                    code,
+                );
+            }
+            GuardResponse::Denied { reason, .. } => {
+                self.record_outcome(action_id, &intent_act, "deny", reason, None);
+            }
+            GuardResponse::ApprovalRequired { reason, .. } => {
+                self.record_outcome(action_id, &intent_act, "require_approval", reason, None);
+            }
+            GuardResponse::Error { code, message } => {
+                self.record_outcome(
+                    action_id,
+                    &intent_act,
+                    "error",
+                    &format!("{code}: {message}"),
+                    None,
+                );
+            }
+        }
+        resp
+    }
+
+    fn handle_run_tool_inner(
         &mut self,
         executable: String,
         args: Vec<String>,
@@ -817,7 +1056,7 @@ impl GuardEngine {
             executable: exe_str.clone(),
             args: args.clone(),
         };
-        let decision = evaluate_action(
+        let explained = evaluate_action_explained(
             &self.cfg.policy,
             &action,
             Some(ExecContext {
@@ -828,9 +1067,16 @@ impl GuardEngine {
             }),
         );
 
-        match decision {
+        match explained.decision {
             Decision::Allow => {}
-            Decision::Deny { reason } => return self.deny_exec(&exe_str, reason),
+            Decision::Deny { reason } => {
+                self.log_event(AuditEvent::PolicyDecision {
+                    action: format!("exec:{exe_str}"),
+                    decision: "deny".into(),
+                    reason: reason.clone(),
+                });
+                return GuardResponse::denied(reason, explained.remediation);
+            }
             Decision::RequireApproval { reason, scope_key } => {
                 let Some(ref store) = self.cfg.approvals else {
                     return self.deny_exec(
@@ -959,13 +1205,36 @@ impl GuardEngine {
             }
         };
 
+        let _session_copy = if self.cfg.policy.manifest.filesystem.workspace_mode == WorkspaceMode::SessionCopy {
+            match SessionWorkspaceCopy::create_from(&self.cfg.base_dir) {
+                Ok(sc) => Some(sc),
+                Err(e) => {
+                    return GuardResponse::Error {
+                        code: "session_copy_error".into(),
+                        message: format!("failed creating session-copy workspace: {e}"),
+                    };
+                }
+            }
+        } else {
+            None
+        };
+        let effective_cwd = match &_session_copy {
+            Some(sc) => normalize_host_lexical_path(&sc.dir.to_string_lossy())
+                .unwrap_or_else(|_| sc.dir.to_string_lossy().into_owned()),
+            None => cwd_str,
+        };
+        let rw_paths = match &_session_copy {
+            Some(_) => vec![effective_cwd.clone()],
+            None => self.cfg.policy.write_roots.iter().map(|r| anchor(r)).collect(),
+        };
+
         let spawn_cfg = SpawnConfig {
             executable: exe_str.clone(),
             cmdline,
-            working_dir: cwd_str,
+            working_dir: effective_cwd,
             env_pairs: self.build_child_env(&env_overrides),
             container_name,
-            rw_paths: self.cfg.policy.write_roots.iter().map(|r| anchor(r)).collect(),
+            rw_paths,
             ro_paths: self.cfg.policy.read_roots.iter().map(|r| anchor(r)).collect(),
             isolation: exec_cfg.isolation,
             timeout_ms: exec_cfg.timeout_ms,
@@ -979,10 +1248,41 @@ impl GuardEngine {
             ),
             enable_acg: exec_cfg.acg,
             enable_cet: exec_cfg.cet_shadow_stack,
+            single_process_mode: exec_cfg.isolation >= IsolationLevel::L1_5,
             max_output_bytes: self.cfg.policy.manifest.credentials.max_bytes_per_request as usize,
+            ..SpawnConfig::default()
         };
 
-        let out = spawn_isolated(&spawn_cfg);
+        let caps = match probe_capabilities() {
+            Ok(c) => c,
+            Err(rc) => {
+                return self.deny_exec(
+                    &exe_str,
+                    format!("sandbox capability probe failed cleanly (status={rc})"),
+                );
+            }
+        };
+        let mut backend = match select_backend_for_tier(exec_cfg.isolation, &caps) {
+            Ok(b) => b,
+            Err(e) => return self.deny_exec(&exe_str, e.to_string()),
+        };
+        let out = match backend.execute(&spawn_cfg) {
+            Ok(o) => {
+                backend.teardown();
+                o
+            }
+            Err(
+                SandboxInitError::IsolationUnavailable { reason, .. }
+                | SandboxInitError::ImageVerificationFailed(reason),
+            ) => {
+                backend.teardown();
+                return self.deny_exec(&exe_str, reason);
+            }
+            Err(e) => {
+                backend.teardown();
+                return self.deny_exec(&exe_str, e.to_string());
+            }
+        };
         let payload = RunToolPayload {
             status: out.status,
             win32_error: out.win32_error,
@@ -1046,6 +1346,12 @@ impl GuardEngine {
         timeout_ms: Option<u64>,
         approval_ticket_id: Option<Uuid>,
     ) -> GuardResponse {
+        let net_act = format!("net:{url}");
+        let net_digest = compute_argv_digest_hex(&format!("{method:?}"), std::slice::from_ref(&url));
+        let action_id = match self.record_intent(&net_act, &net_digest, "egress_proxy") {
+            Ok(id) => id,
+            Err(resp) => return resp,
+        };
         let body = match body_b64 {
             Some(ref b64) => match B64.decode(b64) {
                 Ok(v) => v,
@@ -1065,25 +1371,33 @@ impl GuardEngine {
             grant_id: grant_id.clone(),
         };
         let mut approval_granted = false;
-        match evaluate_action(&self.cfg.policy, &action, None) {
+        let explained = evaluate_action_explained(&self.cfg.policy, &action, None);
+        match explained.decision {
             Decision::Allow => {}
             Decision::Deny { reason } => {
+                self.record_outcome(action_id, &net_act, "deny", &reason, None);
                 self.log_event(AuditEvent::PolicyDecision {
                     action: format!("net:{url}"),
                     decision: "deny".into(),
                     reason: reason.clone(),
                 });
-                return GuardResponse::Denied { reason };
+                return GuardResponse::denied(
+                    reason,
+                    explained
+                        .remediation
+                        .or_else(|| Some("Check allowed destinations via 'wardline check-net'.".into())),
+                );
             }
             Decision::RequireApproval { reason, scope_key } => {
                 let Some(ref store) = self.cfg.approvals else {
                     let msg = "network action requires approval without active ApprovalStore".to_string();
+                    self.record_outcome(action_id, &net_act, "deny", &msg, None);
                     self.log_event(AuditEvent::PolicyDecision {
                         action: format!("net:{url}"),
                         decision: "deny".into(),
                         reason: msg.clone(),
                     });
-                    return GuardResponse::Denied { reason: msg };
+                    return GuardResponse::denied(msg, None);
                 };
                 let binding = serde_json::to_vec(&(&headers, &body)).unwrap_or_default();
                 let digest = match compute_bound_action_digest(
@@ -1103,12 +1417,13 @@ impl GuardEngine {
                 if let Some(tid) = approval_ticket_id {
                     if let Err(e) = store.consume(tid, digest, unix_now_secs()) {
                         let msg = format!("approval verification failed: {e}");
+                        self.record_outcome(action_id, &net_act, "deny", &msg, None);
                         self.log_event(AuditEvent::PolicyDecision {
                             action: format!("net:{url}"),
                             decision: "deny".into(),
                             reason: msg.clone(),
                         });
-                        return GuardResponse::Denied { reason: msg };
+                        return GuardResponse::denied(msg, None);
                     }
                     approval_granted = true;
                 } else {
@@ -1120,6 +1435,7 @@ impl GuardEngine {
                         self.cfg.policy.manifest.approvals.default_ttl_secs,
                     ) {
                         Ok(ticket) => {
+                            self.record_outcome(action_id, &net_act, "require_approval", &reason, None);
                             self.log_event(AuditEvent::PolicyDecision {
                                 action: format!("net:{url}"),
                                 decision: "require_approval".into(),
@@ -1153,9 +1469,10 @@ impl GuardEngine {
                 .unwrap_or(u64::from(self.cfg.policy.manifest.execution.timeout_ms)),
         };
 
-        match execute_egress_request(
+        match execute_egress_request_with_budgets(
             &self.cfg.policy,
             self.cfg.vault.as_ref(),
+            self.cfg.budgets.as_ref(),
             &egress_req,
             approval_granted,
         ) {
@@ -1166,6 +1483,13 @@ impl GuardEngine {
                         destination: url.clone(),
                     });
                 }
+                self.record_outcome(
+                    action_id,
+                    &net_act,
+                    "allow",
+                    "egress completed",
+                    Some(u32::from(resp.status_code)),
+                );
                 self.log_event(AuditEvent::EgressRequest {
                     method: format!("{method:?}"),
                     destination: url,
@@ -1179,14 +1503,18 @@ impl GuardEngine {
             Err(EgressError::PolicyDenied(r))
             | Err(EgressError::BlockedDestination(r))
             | Err(EgressError::CredentialError(r)) => {
+                self.record_outcome(action_id, &net_act, "deny", &r, None);
                 self.log_event(AuditEvent::PolicyDecision {
                     action: format!("net:{url}"),
                     decision: "deny".into(),
                     reason: r.clone(),
                 });
-                GuardResponse::Denied { reason: r }
+                GuardResponse::denied(r, None)
             }
-            Err(EgressError::ApprovalRequired { reason, .. }) => GuardResponse::Denied { reason },
+            Err(EgressError::ApprovalRequired { reason, .. }) => {
+                self.record_outcome(action_id, &net_act, "deny", &reason, None);
+                GuardResponse::denied(reason, None)
+            }
             Err(e) => GuardResponse::Error {
                 code: "egress_error".into(),
                 message: e.to_string(),

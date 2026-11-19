@@ -81,11 +81,22 @@ pub enum GuardResponse {
     },
     Denied {
         reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        remediation: Option<String>,
     },
     Error {
         code: String,
         message: String,
     },
+}
+
+impl GuardResponse {
+    pub fn denied(reason: impl Into<String>, remediation: Option<String>) -> Self {
+        Self::Denied {
+            reason: reason.into(),
+            remediation,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

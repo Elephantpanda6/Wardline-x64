@@ -18,6 +18,34 @@ pub struct CrlEntry {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RevocationList {
+    #[serde(default)]
+    pub revoked_ids: Vec<Uuid>,
+}
+
+impl RevocationList {
+    pub fn from_json_file(path: &Path) -> Result<Self, CertError> {
+        let raw = std::fs::read(path).map_err(|e| CertError::Storage(e.to_string()))?;
+        serde_json::from_slice(&raw).map_err(|e| CertError::Encoding(e.to_string()))
+    }
+
+    pub fn save_json_file(&self, path: &Path) -> Result<(), CertError> {
+        let raw = serde_json::to_vec_pretty(self).map_err(|e| CertError::Encoding(e.to_string()))?;
+        std::fs::write(path, raw).map_err(|e| CertError::Storage(e.to_string()))
+    }
+
+    pub fn add(&mut self, id: Uuid) {
+        if !self.revoked_ids.contains(&id) {
+            self.revoked_ids.push(id);
+        }
+    }
+
+    pub fn is_revoked(&self, id: Uuid) -> bool {
+        self.revoked_ids.contains(&id)
+    }
+}
+
 pub struct CrlStore {
     path: PathBuf,
 }

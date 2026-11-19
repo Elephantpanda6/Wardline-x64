@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define WARDLINE_ABI_VERSION 1u
+#define WARDLINE_ABI_VERSION 2u
 
 typedef enum WlArch {
     WL_ARCH_UNKNOWN = 0,
@@ -32,10 +32,32 @@ typedef enum WlOsKind {
 #define WL_ARM64_FEAT_SVE2        0x10u
 #define WL_ARM64_FEAT_LARGE_PAGES 0x20u
 
+#define WL_TIER_BIT_L0   0x01u
+#define WL_TIER_BIT_L1   0x02u
+#define WL_TIER_BIT_L1_5 0x04u
+#define WL_TIER_BIT_L2   0x08u
+
+#define WL_FEAT_LANDLOCK        (1ull << 0)
+#define WL_FEAT_SECCOMP_BPF     (1ull << 1)
+#define WL_FEAT_USERNS          (1ull << 2)
+#define WL_FEAT_CGROUP_V2       (1ull << 3)
+#define WL_FEAT_GVISOR_RUNSC    (1ull << 4)
+#define WL_FEAT_FIRECRACKER     (1ull << 5)
+#define WL_FEAT_KVM             (1ull << 6)
+#define WL_FEAT_WIN_APPCONTAINER (1ull << 7)
+#define WL_FEAT_WIN_LOWBOX      (1ull << 8)
+#define WL_FEAT_WIN_HCS         (1ull << 9)
+#define WL_FEAT_MACOS_SEATBELT  (1ull << 10)
+#define WL_FEAT_MACOS_VZ        (1ull << 11)
+#define WL_FEAT_FREEBSD_CAPSICUM (1ull << 12)
+#define WL_FEAT_FREEBSD_BHYVE   (1ull << 13)
+
 typedef enum WlIsolationLevel {
-    WL_ISOLATION_L0_RESTRICTED_JOB = 0,
-    WL_ISOLATION_L1_APPCONTAINER   = 1,
-    WL_ISOLATION_L2_MICROVM        = 2
+    WL_ISOLATION_UNISOLATED        = 0,
+    WL_ISOLATION_L0_RESTRICTED_JOB = 1,
+    WL_ISOLATION_L1_APPCONTAINER   = 2,
+    WL_ISOLATION_L1_5_HARDENED     = 3,
+    WL_ISOLATION_L2_MICROVM        = 4
 } WlIsolationLevel;
 
 typedef enum WlPeClass {
@@ -63,12 +85,18 @@ typedef enum WlStatusCode {
     WL_ERR_ACL                   = 12,
     WL_ERR_PROBE                 = 13,
     WL_ERR_MEMORY_LIMIT          = 14,
-    WL_ERR_IO                    = 15
+    WL_ERR_IO                    = 15,
+    WL_ERR_ISOLATION_UNAVAILABLE = 16
 } WlStatusCode;
 
 typedef struct WlHostCapabilities {
-    uint32_t arch;
+    uint32_t struct_size;
     uint32_t abi_version;
+    uint32_t arch;
+    uint32_t os_build_number;
+    uint32_t page_size;
+    uint32_t tier_support_mask;
+    uint64_t feature_flags;
     uint8_t  is_wow64_emulated;
     uint8_t  cet_shadow_stack_supported;
     uint8_t  pac_bti_available;
@@ -77,11 +105,14 @@ typedef struct WlHostCapabilities {
     uint8_t  job_object_iocp_supported;
     uint8_t  os_kind;         /* 1=Windows, 2=Linux, 3=macOS, 4=FreeBSD, 5=OtherUnix */
     uint8_t  arm64_ext_flags; /* bit0=PAC, bit1=BTI, bit2=MTE, bit3=SVE, bit4=SVE2, bit5=LargePages */
-    uint32_t os_build_number;
-    uint32_t page_size;
+    uint8_t  landlock_abi;
+    uint8_t  cgroup_v2_available;
+    uint8_t  reserved[6];
 } WlHostCapabilities;
 
 typedef struct WlSpawnRequest {
+    uint32_t       struct_size;
+    uint32_t       abi_version;
     const uint8_t* executable_utf8;
     size_t         executable_len;
     const uint8_t* cmdline_utf8;
@@ -106,7 +137,9 @@ typedef struct WlSpawnRequest {
     uint8_t        enable_acg;
     uint8_t        enable_cet;
     uint8_t        capture_output;
-    uint8_t        reserved[3];
+    uint8_t        disable_win32k;
+    uint8_t        block_non_ms_binaries;
+    uint8_t        single_process_mode;
 } WlSpawnRequest;
 
 typedef struct WlIoBuffers {
@@ -119,6 +152,7 @@ typedef struct WlIoBuffers {
 } WlIoBuffers;
 
 typedef struct WlSpawnResult {
+    uint32_t struct_size;
     uint32_t status_code;
     uint32_t win32_error;
     uint32_t exit_code;

@@ -52,11 +52,16 @@ fn buildSeatbeltProfile(
     exe_slice: []const u8,
     ro_raw: []const u8,
     rw_raw: []const u8,
+    single_process: bool,
 ) ![:0]u8 {
     var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(px.alloc);
 
-    try buf.appendSlice(px.alloc, "(version 1)\n(deny default)\n(deny network*)\n(allow process-exec*)\n(allow process-fork)\n(allow sysctl-read)\n(allow mach-lookup)\n(allow file-read-metadata)\n");
+    if (single_process) {
+        try buf.appendSlice(px.alloc, "(version 1)\n(deny default)\n(deny network*)\n(deny process-fork)\n(allow process-exec*)\n(allow sysctl-read)\n(allow mach-lookup (global-name \"com.apple.system.logger\"))\n(allow file-read-metadata)\n");
+    } else {
+        try buf.appendSlice(px.alloc, "(version 1)\n(deny default)\n(deny network*)\n(allow process-exec*)\n(allow process-fork)\n(allow sysctl-read)\n(allow mach-lookup)\n(allow file-read-metadata)\n");
+    }
     try buf.appendSlice(px.alloc, "(allow file-read*\n");
     const sys_ro = [_][]const u8{
         "/System",
@@ -153,7 +158,7 @@ export fn wl_classify_pe(bytes_ptr: ?[*]const u8, bytes_len: usize) callconv(.c)
 }
 
 export fn wl_probe_capabilities(out_caps: ?*common.WlHostCapabilities) callconv(.c) u32 {
-    const caps = out_caps orelse return @intFromEnum(common.WlStatusCode.invalid_arg);
+    const caps = common.validateCapsPtr(out_caps) orelse return @intFromEnum(common.WlStatusCode.invalid_arg);
     var psize = sysctlU32("hw.pagesize");
     if (psize == 0) psize = px.pageSize();
 
@@ -171,9 +176,21 @@ export fn wl_probe_capabilities(out_caps: ?*common.WlHostCapabilities) callconv(
         if (pac or bti) pac_bti = 1;
     }
 
+    var tier_mask: u32 = common.WL_TIER_BIT_L0 | common.WL_TIER_BIT_L1 | common.WL_TIER_BIT_L1_5;
+    var feat: u64 = common.WL_FEAT_MACOS_SEATBELT;
+    if (hv_ok != 0) {
+        tier_mask |= common.WL_TIER_BIT_L2;
+        feat |= common.WL_FEAT_MACOS_VZ;
+    }
+
     caps.* = .{
-        .arch = wl_engine_arch(),
+        .struct_size = @sizeOf(common.WlHostCapabilities),
         .abi_version = common.abi_version,
+        .arch = wl_engine_arch(),
+        .os_build_number = parseDarwinRelease(),
+        .page_size = psize,
+        .tier_support_mask = tier_mask,
+        .feature_flags = feat,
         .is_wow64_emulated = translated,
         .cet_shadow_stack_supported = 0,
         .pac_bti_available = pac_bti,
@@ -182,8 +199,9 @@ export fn wl_probe_capabilities(out_caps: ?*common.WlHostCapabilities) callconv(
         .job_object_iocp_supported = 1,
         .os_kind = @intFromEnum(common.WlOsKind.macos),
         .arm64_ext_flags = ext_flags,
-        .os_build_number = parseDarwinRelease(),
-        .page_size = psize,
+        .landlock_abi = 0,
+        .cgroup_v2_available = 0,
+        .reserved = @splat(0),
     };
     return @intFromEnum(common.WlStatusCode.ok);
 }
@@ -223,12 +241,17 @@ export fn wl_spawn_isolated(
     const io = io_opt orelse return @intFromEnum(common.WlStatusCode.invalid_arg);
     const res = res_opt orelse return @intFromEnum(common.WlStatusCode.invalid_arg);
 
+    if (!common.validateSpawnReq(req, io, res)) {
+        return res.status_code;
+    }
+
     const exe_slice = if (req.executable_utf8) |p| p[0..req.executable_len] else "";
     const bin_info = px.inspectExecutableOnDisk(exe_slice);
     const host_arch: common.WlArch = if (builtin.cpu.arch == .aarch64) .arm64 else .x64;
     const eval = evaluateMacosSpawnPolicy(bin_info, host_arch, req.allow_prism_x64 != 0);
     if (eval.status != .ok) {
         res.* = std.mem.zeroes(common.WlSpawnResult);
+        res.struct_size = @sizeOf(common.WlSpawnResult);
         res.emulation_detected = if (eval.emulation) 1 else 0;
         common.writeDetail(io, res, eval.detail);
         res.status_code = @intFromEnum(eval.status);
@@ -237,8 +260,10 @@ export fn wl_spawn_isolated(
 
     const ro_slice = if (req.ro_paths_utf8) |p| p[0..req.ro_paths_len] else "";
     const rw_slice = if (req.rw_paths_utf8) |p| p[0..req.rw_paths_len] else "";
-    const sbpl_z = buildSeatbeltProfile(exe_slice, ro_slice, rw_slice) catch {
+    const single_proc = (req.single_process_mode != 0) or (req.isolation_level == @intFromEnum(common.WlIsolationLevel.l1_5_hardened));
+    const sbpl_z = buildSeatbeltProfile(exe_slice, ro_slice, rw_slice, single_proc) catch {
         res.* = std.mem.zeroes(common.WlSpawnResult);
+        res.struct_size = @sizeOf(common.WlSpawnResult);
         common.writeDetail(io, res, "failed to construct Seatbelt SBPL profile");
         res.status_code = @intFromEnum(common.WlStatusCode.appcontainer);
         return res.status_code;

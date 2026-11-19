@@ -1,0 +1,41 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  clippy-and-invariants:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+      - name: Zig tests & engine build
+        run: |
+          zig build common-tests
+          zig build all-engines
+      - name: Clippy (-D warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Workspace & I1-I7 invariants
+        run: cargo test --workspace -- --test-threads=1
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

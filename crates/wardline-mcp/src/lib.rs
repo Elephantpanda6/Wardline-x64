@@ -1,5 +1,9 @@
 #![forbid(unsafe_code)]
 
+pub mod learn;
+pub mod registry;
+pub mod wrap;
+
 use std::io::{BufRead, Write};
 
 use base64::engine::general_purpose::STANDARD as B64;
@@ -11,6 +15,12 @@ use wardline_cert::WardCertChain;
 use wardline_core::NetMethod;
 use wardline_guard::pipe_server::send_pipe_request;
 use wardline_guard::protocol::{GuardRequest, GuardResponse};
+use wardline_policy::PolicyManifest;
+
+use crate::learn::LearnRecorder;
+
+pub const MAX_RPC_FRAME_BYTES: usize = 1024 * 1024;
+pub const MAX_RPC_ID_LEN: usize = 256;
 
 pub fn server_name() -> &'static str {
     "wardline-mcp"
@@ -50,13 +60,18 @@ struct JsonRpcRequest {
 }
 
 #[derive(Debug, Serialize)]
-struct JsonRpcResponse {
-    jsonrpc: &'static str,
-    id: Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<JsonRpcError>,
+#[serde(untagged)]
+enum JsonRpcResponse {
+    Ok {
+        jsonrpc: &'static str,
+        id: Value,
+        result: Value,
+    },
+    Err {
+        jsonrpc: &'static str,
+        id: Value,
+        error: JsonRpcError,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -66,26 +81,32 @@ struct JsonRpcError {
 }
 
 fn rpc_ok(id: Value, result: Value) -> Value {
-    serde_json::to_value(JsonRpcResponse {
+    serde_json::to_value(JsonRpcResponse::Ok {
         jsonrpc: "2.0",
         id,
-        result: Some(result),
-        error: None,
+        result,
     })
     .unwrap_or_default()
 }
 
 fn rpc_err(id: Value, code: i32, message: impl Into<String>) -> Value {
-    serde_json::to_value(JsonRpcResponse {
+    serde_json::to_value(JsonRpcResponse::Err {
         jsonrpc: "2.0",
         id,
-        result: None,
-        error: Some(JsonRpcError {
+        error: JsonRpcError {
             code,
             message: message.into(),
-        }),
+        },
     })
     .unwrap_or_default()
+}
+
+fn is_valid_rpc_id(id: &Value) -> bool {
+    match id {
+        Value::Null | Value::Number(_) => true,
+        Value::String(s) => s.len() <= MAX_RPC_ID_LEN,
+        Value::Bool(_) | Value::Array(_) | Value::Object(_) => false,
+    }
 }
 
 fn tool_catalog() -> Value {
@@ -271,10 +292,13 @@ fn guard_response_to_mcp_tool_result(resp: GuardResponse) -> Value {
             }],
             "isError": true
         }),
-        GuardResponse::Denied { reason } => json!({
+        GuardResponse::Denied { reason, remediation } => json!({
             "content": [{
                 "type": "text",
-                "text": format!("DENIED: {reason}")
+                "text": match remediation {
+                    Some(hint) => format!("DENIED: {reason}\nRemediation: {hint}"),
+                    None => format!("DENIED: {reason}"),
+                }
             }],
             "isError": true
         }),
@@ -290,11 +314,26 @@ fn guard_response_to_mcp_tool_result(resp: GuardResponse) -> Value {
 
 pub struct McpServer<T: GuardTransport> {
     transport: T,
+    learn: Option<LearnRecorder>,
 }
 
 impl<T: GuardTransport> McpServer<T> {
     pub fn new(transport: T) -> Self {
-        Self { transport }
+        Self {
+            transport,
+            learn: None,
+        }
+    }
+
+    pub fn with_learn(transport: T) -> Self {
+        Self {
+            transport,
+            learn: Some(LearnRecorder::default()),
+        }
+    }
+
+    pub fn render_learn_diff_toml(&self, baseline: Option<&PolicyManifest>) -> Option<String> {
+        self.learn.as_ref().map(|r| r.render_toml_diff(baseline))
     }
 
     fn build_guard_request(&self, tool_name: &str, args: Value) -> Result<GuardRequest, String> {
@@ -363,10 +402,26 @@ impl<T: GuardTransport> McpServer<T> {
     }
 
     pub fn handle_json_line(&mut self, line: &str) -> Option<Value> {
+        if line.len() > MAX_RPC_FRAME_BYTES {
+            return Some(rpc_err(
+                Value::Null,
+                -32600,
+                format!("JSON-RPC frame exceeds {MAX_RPC_FRAME_BYTES} byte limit"),
+            ));
+        }
         let req: JsonRpcRequest = match serde_json::from_str(line) {
             Ok(r) => r,
             Err(e) => return Some(rpc_err(Value::Null, -32700, format!("parse error: {e}"))),
         };
+        if let Some(ref raw_id) = req.id {
+            if !is_valid_rpc_id(raw_id) {
+                return Some(rpc_err(
+                    Value::Null,
+                    -32600,
+                    "JSON-RPC id must be null, number, or string <= 256 bytes",
+                ));
+            }
+        }
         if req.jsonrpc != "2.0" {
             let id = req.id.unwrap_or(Value::Null);
             return Some(rpc_err(id, -32600, "jsonrpc must be '2.0'"));
@@ -402,6 +457,9 @@ impl<T: GuardTransport> McpServer<T> {
                     Ok(g) => g,
                     Err(msg) => return Some(rpc_err(id, -32602, msg)),
                 };
+                if let Some(ref mut rec) = self.learn {
+                    rec.record_guard_request(&guard_req);
+                }
                 let resp = match self.transport.send(guard_req) {
                     Ok(r) => r,
                     Err(msg) => GuardResponse::Error {
@@ -479,6 +537,7 @@ mod tests {
                 },
                 GuardResponse::Denied {
                     reason: "LOLBin powershell.exe blocked".into(),
+                    remediation: None,
                 },
             ]),
         };
@@ -527,5 +586,35 @@ mod tests {
             .contains("LOLBin"));
         assert_eq!(lines[5]["error"]["code"], -32601);
         assert_eq!(srv.transport.seen.len(), 3);
+    }
+
+    #[test]
+    fn jsonrpc_rejects_oversized_frames_invalid_ids_and_learns() {
+        let mut srv = McpServer::with_learn(MockTransport {
+            seen: Vec::new(),
+            replies: VecDeque::from([GuardResponse::Ok { payload: json!({}) }]),
+        });
+
+        let huge = "x".repeat(MAX_RPC_FRAME_BYTES + 1);
+        let huge_resp = srv.handle_json_line(&huge).unwrap();
+        assert_eq!(huge_resp["error"]["code"], -32600);
+        assert!(huge_resp.get("result").is_none());
+
+        let array_id = r#"{"jsonrpc":"2.0","id":[1,2],"method":"ping"}"#;
+        let bad_id_resp = srv.handle_json_line(array_id).unwrap();
+        assert_eq!(bad_id_resp["error"]["code"], -32600);
+
+        let long_id = format!(r#"{{"jsonrpc":"2.0","id":"{}","method":"ping"}}"#, "a".repeat(300));
+        assert_eq!(srv.handle_json_line(&long_id).unwrap()["error"]["code"], -32600);
+
+        let notif = r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{}}"#;
+        assert!(srv.handle_json_line(notif).is_none());
+
+        let learn_call = r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"wardline_fs_read","arguments":{"path":"src/main.rs"}}}"#;
+        let call_resp = srv.handle_json_line(learn_call).unwrap();
+        assert!(call_resp.get("result").is_some());
+        assert!(call_resp.get("error").is_none());
+        let diff = srv.render_learn_diff_toml(None).unwrap();
+        assert!(diff.contains("workspace_read"));
     }
 }

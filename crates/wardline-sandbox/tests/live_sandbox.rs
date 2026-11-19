@@ -138,9 +138,13 @@ fn test_base_cfg(mode: &str) -> SpawnConfig {
 fn run_windows_suite() {
     let (arch, abi) = engine_identity();
     assert_eq!(arch, TargetArch::host());
-    assert_eq!(abi, 1);
+    assert_eq!(abi, 2);
 
     let caps = probe_capabilities().expect("probe_capabilities");
+    assert_eq!(caps.abi_version, 2);
+    assert_eq!(caps.struct_size, 48);
+    assert!(caps.supports_tier(IsolationLevel::L0));
+    assert!(caps.supports_tier(IsolationLevel::L1));
     assert_eq!(caps.os_name(), "windows");
     assert_eq!(caps.appcontainer_supported, 1);
     assert_eq!(caps.job_object_iocp_supported, 1);
@@ -288,9 +292,12 @@ fn run_unix_suite() {
 
     let (arch, abi) = engine_identity();
     assert_eq!(arch, TargetArch::host());
-    assert_eq!(abi, 1);
+    assert_eq!(abi, 2);
 
     let caps = probe_capabilities().expect("probe_capabilities");
+    assert_eq!(caps.abi_version, 2);
+    assert_eq!(caps.struct_size, 48);
+    assert!(caps.supports_tier(IsolationLevel::L0));
     assert!(caps.os_kind >= 2);
     assert!(caps.page_size >= 4096);
     assert_eq!(caps.job_object_iocp_supported, 1);

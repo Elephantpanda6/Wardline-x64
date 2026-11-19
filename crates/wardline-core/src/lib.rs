@@ -76,10 +76,39 @@ pub enum ArchExecutionMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
 pub enum IsolationLevel {
+    #[serde(alias = "unisolated", alias = "none")]
+    Unisolated,
+    #[serde(alias = "l0")]
     L0,
     #[default]
+    #[serde(alias = "l1")]
     L1,
+    #[serde(rename = "L1.5", alias = "L1_5", alias = "l1_5", alias = "l1.5")]
+    L1_5,
+    #[serde(alias = "l2")]
     L2,
+}
+
+impl IsolationLevel {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unisolated => "unisolated",
+            Self::L0 => "L0",
+            Self::L1 => "L1",
+            Self::L1_5 => "L1.5",
+            Self::L2 => "L2",
+        }
+    }
+
+    pub const fn abi_code(self) -> u32 {
+        match self {
+            Self::Unisolated => 0,
+            Self::L0 => 1,
+            Self::L1 => 2,
+            Self::L1_5 => 3,
+            Self::L2 => 4,
+        }
+    }
 }
 
 #[derive(Debug, Error)]

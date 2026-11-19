@@ -1,0 +1,56 @@
+[package]
+name = "wardline-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+ciborium = "0.2"
+libfuzzer-sys = "0.4"
+serde_json = "1"
+wardline-cert = { path = "../crates/wardline-cert" }
+wardline-core = { path = "../crates/wardline-core" }
+wardline-guard = { path = "../crates/wardline-guard" }
+wardline-log = { path = "../crates/wardline-log" }
+wardline-mcp = { path = "../crates/wardline-mcp" }
+wardline-policy = { path = "../crates/wardline-policy" }
+
+[[bin]]
+name = "fuzz_policy_toml"
+path = "fuzz_targets/fuzz_policy_toml.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_argv_shield"
+path = "fuzz_targets/fuzz_argv_shield.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_path_normalize"
+path = "fuzz_targets/fuzz_path_normalize.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_http_destination"
+path = "fuzz_targets/fuzz_http_destination.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_cert_chain_cbor"
+path = "fuzz_targets/fuzz_cert_chain_cbor.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_wal_frames"
+path = "fuzz_targets/fuzz_wal_frames.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_mcp_jsonrpc"
+path = "fuzz_targets/fuzz_mcp_jsonrpc.rs"
+doc = false

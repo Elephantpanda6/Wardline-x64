@@ -1,6 +1,9 @@
 [project]
 name = "wardline-client"
-version = "0.1.0"
-description = "Thin Python SDK for the Wardline Windows capability runtime"
+version = "0.2.0"
+description = "Cross-platform Python capability SDK for the Wardline runtime (Windows x64/ARM64, Linux, macOS, BSD)"
 requires-python = ">=3.11"
 dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]

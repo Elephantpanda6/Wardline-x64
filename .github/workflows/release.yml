@@ -1,0 +1,42 @@
+name: Release Cross-Platform Binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: wardline-windows-x64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: wardline-linux-x64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: wardline-linux-arm64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: wardline-macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+      - name: Build Zig engines
+        run: zig build all-engines
+      - name: Build release binaries
+        run: cargo build --release --bins --target ${{ matrix.target }}
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: target/${{ matrix.target }}/release/wardline*

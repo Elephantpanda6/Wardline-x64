@@ -37,9 +37,9 @@ Wardline is engineered as a **zero-trust capability broker, secret vault, anti-S
 
 ## 3. Core Production Use Cases
 
-1. **Local AI Coding & IDE Agent Containment (`arm64-laptop.toml`, `x64-workstation.toml`)**
-   - Connects Claude Desktop, Cursor, or IDE MCP clients to `wardline-mcp` (zero secrets, `#![forbid(unsafe_code)]`) over stdio JSON-RPC, forwarding tool calls to `wardline-guard` over a protected Named Pipe (Windows) or `SO_PEERCRED`/`getpeereid`-verified `0600` Unix Domain Socket.
-   - Blocks 25 Windows LOLBins + 34 Unix shell/interpreter proxies (`cmd`, `powershell`, `sh`, `bash`, `python3`, `osascript`, `nc`, `sudo`, …) and stops symlink/NTFS-junction workspace escapes.
+1. **Local AI Coding & IDE Agent Containment (`x64-workstation.toml`, `arm64-laptop.toml`)**
+   - Connects Claude Desktop, Cursor, or IDE MCP clients to `wardline-mcp` (zero secrets, `#![forbid(unsafe_code)]`) via `serve` or `wrap` over stdio JSON-RPC `2024-11-05`, forwarding tool calls to `wardline-guard` over a protected Named Pipe (Windows) or `SO_PEERCRED`/`getpeereid`-verified `0600` Unix Domain Socket. Also usable directly from Python, TypeScript, Go, and Rust (`wardline-client`) SDKs.
+   - Blocks 25 Windows LOLBins + 34 Unix shell/interpreter proxies (`cmd`, `powershell`, `sh`, `bash`, `python3`, `osascript`, `nc`, `sudo`, …), recursively unwraps wrapper chains (`env`/`timeout`/`nice`/`nohup`/`stdbuf`/`sudo`/`doas`/`busybox`), and stops symlink/NTFS-junction workspace escapes.
 
 2. **Cloud ARM64 & x64 Autonomous Operations & CI/CD Runners (`arm64-server.toml`, `x64-server.toml`)**
    - Isolates automated build/remediation agents on AWS Graviton, Ampere Altra, Azure Cobalt, or x86_64 CI workers with zero direct socket access (blocking cloud IMDS `169.254.169.254` and RFC1918 traversal via single-lookup DNS pinning + AppContainer/UserNS+Seccomp/Seatbelt).
@@ -56,8 +56,8 @@ Wardline is engineered as a **zero-trust capability broker, secret vault, anti-S
 
 ---
 
-## 4. Forward Roadmap
+## 4. Implemented Assurance & Forward Roadmap
 
-- **Hardware-Isolated `L2` MicroVM Backends**: Full guest-agent integration across Linux KVM, Apple `Virtualization.framework`, Windows HCS/WHPX, and FreeBSD `bhyve` behind the existing `IsolationLevel::L2` fail-closed gate.
-- **Per-Event RFC-6962 Merkle Inclusion Proofs & Egress Byte Budgets**: Compact offline inclusion proofs for large fleet audit logs and durable multi-destination transfer quotas.
-- **Unified Monorepo Distribution Matrix**: Optional convergence of dual-architecture builds under automated multi-OS release pipelines (`win-arm64`, `win-x64`, `linux-arm64`, `linux-x64`, `macos-arm64`, `macos-x64`, `freebsd-arm64`, `freebsd-x64`).
+- **Implemented Verification & Quotas**: Binary `BLAKE3` Merkle inclusion proofs (`wardline audit proof` / `wardline-verify --proof-index`), signed Merkle checkpoints (`audit checkpoint`), persistent `redb` egress byte/request budgets (`[[network.destinations]]`), `L1.5` browser/gVisor hardening profiles, `L2` signed golden image manifests (`wardline image sign`/`verify`), and automated release CI workflows (`.github/workflows/{security-scan,release}.yml`).
+- **Live L2 Hypervisor Kernel Drivers**: End-to-end Firecracker REST+vsock, Hyper-V HCS, and Apple `Virtualization.framework` VM lifecycle activation for operators supplying signed kernel/rootfs bundles via `wardline-guest-agent`.
+- **Optional Unified Distribution Archives**: Prebuilt multi-arch engine bundles across `win-x64`, `linux-x64`, `macos-x64`, `freebsd-x64`, `win-arm64`, `linux-arm64`, `macos-arm64`, and `freebsd-arm64`.

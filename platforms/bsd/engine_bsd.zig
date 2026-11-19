@@ -71,14 +71,30 @@ export fn wl_classify_pe(bytes_ptr: ?[*]const u8, bytes_len: usize) callconv(.c)
 }
 
 export fn wl_probe_capabilities(out_caps: ?*common.WlHostCapabilities) callconv(.c) u32 {
-    const caps = out_caps orelse return @intFromEnum(common.WlStatusCode.invalid_arg);
+    const caps = common.validateCapsPtr(out_caps) orelse return @intFromEnum(common.WlStatusCode.invalid_arg);
     const psize = px.pageSize();
     const bhyve_ok: u8 = if (c.access("/dev/vmm", 0) == 0) 1 else 0;
     const os_kind: common.WlOsKind = if (builtin.os.tag == .freebsd) .freebsd else .other_unix;
 
+    var tier_mask: u32 = common.WL_TIER_BIT_L0;
+    var feat: u64 = 0;
+    if (builtin.os.tag == .freebsd) {
+        tier_mask |= common.WL_TIER_BIT_L1;
+        feat |= common.WL_FEAT_FREEBSD_CAPSICUM;
+    }
+    if (bhyve_ok != 0) {
+        tier_mask |= common.WL_TIER_BIT_L2;
+        feat |= common.WL_FEAT_FREEBSD_BHYVE;
+    }
+
     caps.* = .{
-        .arch = wl_engine_arch(),
+        .struct_size = @sizeOf(common.WlHostCapabilities),
         .abi_version = common.abi_version,
+        .arch = wl_engine_arch(),
+        .os_build_number = 0,
+        .page_size = psize,
+        .tier_support_mask = tier_mask,
+        .feature_flags = feat,
         .is_wow64_emulated = 0,
         .cet_shadow_stack_supported = 0,
         .pac_bti_available = 0,
@@ -87,8 +103,9 @@ export fn wl_probe_capabilities(out_caps: ?*common.WlHostCapabilities) callconv(
         .job_object_iocp_supported = 1,
         .os_kind = @intFromEnum(os_kind),
         .arm64_ext_flags = if (builtin.cpu.arch == .aarch64 and psize > 4096) common.WL_ARM64_FEAT_LARGE_PAGES else 0,
-        .os_build_number = 0,
-        .page_size = psize,
+        .landlock_abi = 0,
+        .cgroup_v2_available = 0,
+        .reserved = @splat(0),
     };
     return @intFromEnum(common.WlStatusCode.ok);
 }
@@ -102,10 +119,15 @@ export fn wl_spawn_isolated(
     const io = io_opt orelse return @intFromEnum(common.WlStatusCode.invalid_arg);
     const res = res_opt orelse return @intFromEnum(common.WlStatusCode.invalid_arg);
 
+    if (!common.validateSpawnReq(req, io, res)) {
+        return res.status_code;
+    }
+
     const exe_slice = if (req.executable_utf8) |p| p[0..req.executable_len] else "";
     const bin_info = px.inspectExecutableOnDisk(exe_slice);
     if (bin_info.format != .elf) {
         res.* = std.mem.zeroes(common.WlSpawnResult);
+        res.struct_size = @sizeOf(common.WlSpawnResult);
         common.writeDetail(io, res, "non-ELF image rejected on BSD/POSIX");
         res.status_code = @intFromEnum(common.WlStatusCode.pe_disallowed_arch);
         return res.status_code;
@@ -114,12 +136,14 @@ export fn wl_spawn_isolated(
     const host_is_arm64 = builtin.cpu.arch == .aarch64;
     if (host_is_arm64 and !bin_info.has_arm64) {
         res.* = std.mem.zeroes(common.WlSpawnResult);
+        res.struct_size = @sizeOf(common.WlSpawnResult);
         common.writeDetail(io, res, "non-ARM64 ELF rejected on bsd-arm64");
         res.status_code = @intFromEnum(common.WlStatusCode.pe_disallowed_arch);
         return res.status_code;
     }
     if (!host_is_arm64 and !bin_info.has_amd64) {
         res.* = std.mem.zeroes(common.WlSpawnResult);
+        res.struct_size = @sizeOf(common.WlSpawnResult);
         common.writeDetail(io, res, "non-x64 ELF rejected on bsd-x64");
         res.status_code = @intFromEnum(common.WlStatusCode.pe_disallowed_arch);
         return res.status_code;

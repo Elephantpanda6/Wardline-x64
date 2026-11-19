@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/wardline-core",
+    "crates/wardline-platform",
     "crates/wardline-policy",
     "crates/wardline-cert",
     "crates/wardline-approval",
@@ -12,6 +13,7 @@ members = [
     "crates/wardline-sandbox",
     "crates/wardline-guard",
     "crates/wardline-mcp",
+    "crates/wardline-guest-agent",
     "crates/wardline-cli",
 ]
 
@@ -22,6 +24,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 wardline-core = { path = "crates/wardline-core" }
+wardline-platform = { path = "crates/wardline-platform" }
 wardline-policy = { path = "crates/wardline-policy" }
 wardline-cert = { path = "crates/wardline-cert" }
 wardline-approval = { path = "crates/wardline-approval" }
@@ -41,6 +44,7 @@ toml = "0.8"
 ciborium = "0.2"
 blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
+sha2 = "0.10"
 chacha20poly1305 = "0.10"
 zeroize = { version = "1", features = ["derive"] }
 rand = "0.8"

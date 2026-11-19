@@ -251,6 +251,62 @@ impl ApprovalStore {
         Ok(out)
     }
 
+    pub fn list_tickets(&self, status_filter: Option<ApprovalStatus>) -> Result<Vec<ApprovalTicket>, ApprovalError> {
+        let db = self.open_db()?;
+        let tx = db
+            .begin_read()
+            .map_err(|e| ApprovalError::Storage(e.to_string()))?;
+        let tbl = tx
+            .open_table(TICKETS_TABLE)
+            .map_err(|e| ApprovalError::Storage(e.to_string()))?;
+        let mut out = Vec::new();
+        for item in tbl
+            .iter()
+            .map_err(|e| ApprovalError::Storage(e.to_string()))?
+        {
+            let (_, val) = item.map_err(|e| ApprovalError::Storage(e.to_string()))?;
+            let ticket: ApprovalTicket = serde_json::from_str(val.value())
+                .map_err(|e| ApprovalError::Storage(e.to_string()))?;
+            if status_filter.is_none_or(|want| ticket.status == want) {
+                out.push(ticket);
+            }
+        }
+        out.sort_by_key(|t| (t.created_at_unix, t.ticket_id));
+        Ok(out)
+    }
+
+    pub fn save_snapshot_json(&self, path: &Path) -> Result<usize, ApprovalError> {
+        let tickets = self.list_tickets(None)?;
+        let json = serde_json::to_vec_pretty(&tickets)
+            .map_err(|e| ApprovalError::Storage(e.to_string()))?;
+        std::fs::write(path, json).map_err(|e| ApprovalError::Storage(e.to_string()))?;
+        Ok(tickets.len())
+    }
+
+    pub fn load_snapshot_json(&self, path: &Path) -> Result<usize, ApprovalError> {
+        let raw = std::fs::read(path).map_err(|e| ApprovalError::Storage(e.to_string()))?;
+        let tickets: Vec<ApprovalTicket> = serde_json::from_slice(&raw)
+            .map_err(|e| ApprovalError::Storage(e.to_string()))?;
+        let db = self.open_db()?;
+        let tx = db
+            .begin_write()
+            .map_err(|e| ApprovalError::Storage(e.to_string()))?;
+        {
+            let mut tbl = tx
+                .open_table(TICKETS_TABLE)
+                .map_err(|e| ApprovalError::Storage(e.to_string()))?;
+            for ticket in &tickets {
+                let encoded = serde_json::to_string(ticket)
+                    .map_err(|e| ApprovalError::Storage(e.to_string()))?;
+                tbl.insert(ticket.ticket_id.as_bytes(), encoded.as_str())
+                    .map_err(|e| ApprovalError::Storage(e.to_string()))?;
+            }
+        }
+        tx.commit()
+            .map_err(|e| ApprovalError::Storage(e.to_string()))?;
+        Ok(tickets.len())
+    }
+
     pub fn sweep_expired(&self, now_unix: u64) -> Result<usize, ApprovalError> {
         let db = self.open_db()?;
         let tx = db
@@ -402,6 +458,20 @@ mod tests {
         let consumed = daemon_store.consume(ticket.ticket_id, digest_a, 2003).unwrap();
         assert_eq!(consumed.status, ApprovalStatus::Consumed);
 
+        let snap_path = temp_db("snapshot.json");
+        let count = daemon_store.save_snapshot_json(&snap_path).unwrap();
+        assert_eq!(count, 1);
+
+        let restored_db = temp_db("restored");
+        let restored = ApprovalStore::open(&restored_db).unwrap();
+        assert_eq!(restored.load_snapshot_json(&snap_path).unwrap(), 1);
+        assert_eq!(
+            restored.list_tickets(Some(ApprovalStatus::Consumed)).unwrap().len(),
+            1
+        );
+
+        let _ = std::fs::remove_file(snap_path);
+        let _ = std::fs::remove_file(restored_db);
         let _ = std::fs::remove_file(db_path);
     }
 }

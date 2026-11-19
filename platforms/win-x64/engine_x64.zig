@@ -34,7 +34,7 @@ export fn wl_classify_pe(bytes_ptr: ?[*]const u8, bytes_len: usize) callconv(.c)
 }
 
 export fn wl_probe_capabilities(out_caps: ?*common.WlHostCapabilities) callconv(.c) u32 {
-    const caps = out_caps orelse return @intFromEnum(common.WlStatusCode.invalid_arg);
+    const caps = common.validateCapsPtr(out_caps) orelse return @intFromEnum(common.WlStatusCode.invalid_arg);
 
     var sys_info = std.mem.zeroes(w.SYSTEM_INFO);
     w.GetNativeSystemInfo(&sys_info);
@@ -47,19 +47,38 @@ export fn wl_probe_capabilities(out_caps: ?*common.WlHostCapabilities) callconv(
     var native_machine: w.WORD = 0;
     _ = w.IsWow64Process2(w.GetCurrentProcess(), &proc_machine, &native_machine);
 
+    const ac_ok: u8 = if (os_ver.dwBuildNumber >= 9200 or os_ver.dwMajorVersion >= 10) 1 else 0;
+    const hcs_ok = checkHcsAvailable();
+    var tier_mask: u32 = common.WL_TIER_BIT_L0;
+    var feat: u64 = 0;
+    if (ac_ok != 0) {
+        tier_mask |= common.WL_TIER_BIT_L1 | common.WL_TIER_BIT_L1_5;
+        feat |= common.WL_FEAT_WIN_APPCONTAINER | common.WL_FEAT_WIN_LOWBOX;
+    }
+    if (hcs_ok != 0) {
+        tier_mask |= common.WL_TIER_BIT_L2;
+        feat |= common.WL_FEAT_WIN_HCS;
+    }
+
     caps.* = .{
-        .arch = @intFromEnum(common.WlArch.x64),
+        .struct_size = @sizeOf(common.WlHostCapabilities),
         .abi_version = common.abi_version,
+        .arch = @intFromEnum(common.WlArch.x64),
+        .os_build_number = os_ver.dwBuildNumber,
+        .page_size = sys_info.dwPageSize,
+        .tier_support_mask = tier_mask,
+        .feature_flags = feat,
         .is_wow64_emulated = if (proc_machine != 0) 1 else 0,
         .cet_shadow_stack_supported = checkCetShadowStackSupported(),
         .pac_bti_available = 0,
-        .hyperv_hcs_available = checkHcsAvailable(),
-        .appcontainer_supported = if (os_ver.dwBuildNumber >= 9200 or os_ver.dwMajorVersion >= 10) 1 else 0,
+        .hyperv_hcs_available = hcs_ok,
+        .appcontainer_supported = ac_ok,
         .job_object_iocp_supported = 1,
         .os_kind = @intFromEnum(common.WlOsKind.windows),
         .arm64_ext_flags = 0,
-        .os_build_number = os_ver.dwBuildNumber,
-        .page_size = sys_info.dwPageSize,
+        .landlock_abi = 0,
+        .cgroup_v2_available = 0,
+        .reserved = @splat(0),
     };
     return @intFromEnum(common.WlStatusCode.ok);
 }
@@ -73,10 +92,15 @@ export fn wl_spawn_isolated(
     const io = io_opt orelse return @intFromEnum(common.WlStatusCode.invalid_arg);
     const res = res_opt orelse return @intFromEnum(common.WlStatusCode.invalid_arg);
 
+    if (!common.validateSpawnReq(req, io, res)) {
+        return res.status_code;
+    }
+
     const exe_slice = if (req.executable_utf8) |p| p[0..req.executable_len] else "";
     const pe_class = sandbox.inspectExecutablePeOnDisk(exe_slice);
     if (pe_class != .amd64) {
         res.* = std.mem.zeroes(common.WlSpawnResult);
+        res.struct_size = @sizeOf(common.WlSpawnResult);
         common.writeDetail(io, res, "win-x64 engine only permits native AMD64 (0x8664) PE images");
         res.status_code = @intFromEnum(common.WlStatusCode.pe_disallowed_arch);
         return res.status_code;
@@ -95,6 +119,14 @@ export fn wl_spawn_isolated(
     const acg_on = req.enable_acg != 0;
     if (acg_on) {
         word0 |= w.MITIGATION_PROHIBIT_DYNAMIC_CODE_ALWAYS_ON;
+    }
+    if (req.isolation_level == @intFromEnum(common.WlIsolationLevel.l1_5_hardened)) {
+        if (req.disable_win32k != 0) {
+            word0 |= w.MITIGATION_WIN32K_SYSTEM_CALL_DISABLE_ALWAYS_ON;
+        }
+        if (req.block_non_ms_binaries != 0) {
+            word0 |= w.MITIGATION_BLOCK_NON_MICROSOFT_BINARIES_ALWAYS_ON;
+        }
     }
 
     var word1: u64 = 0;
@@ -145,9 +177,12 @@ export fn wl_harden_current_process_dacl(out_win32_err: ?*u32) callconv(.c) u32 
 }
 
 test "win-x64 probe reports x64 host capabilities cleanly" {
-    var caps: common.WlHostCapabilities = undefined;
+    var caps = std.mem.zeroes(common.WlHostCapabilities);
+    caps.struct_size = @sizeOf(common.WlHostCapabilities);
     try std.testing.expectEqual(@intFromEnum(common.WlStatusCode.ok), wl_probe_capabilities(&caps));
+    try std.testing.expectEqual(common.abi_version, caps.abi_version);
     try std.testing.expectEqual(@intFromEnum(common.WlArch.x64), caps.arch);
     try std.testing.expect(caps.os_build_number > 0);
     try std.testing.expectEqual(@as(u32, 4096), caps.page_size);
+    try std.testing.expect((caps.tier_support_mask & common.WL_TIER_BIT_L0) != 0);
 }

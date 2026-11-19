@@ -1,7 +1,11 @@
 # Wardline build outputs and local state
 /target/
+target/
 /zig-out/
 /.zig-cache/
+__pycache__/
+*.pyc
+.pytest_cache/
 **/*.rs.bk
 *.pdb
 *.tmp

@@ -5,6 +5,7 @@ use wardline_core::capability::parse_canonical_destination;
 use wardline_core::path::{looks_like_windows_path, normalize_host_lexical_path};
 use wardline_core::{ArchExecutionMode, IsolationLevel};
 
+use crate::sessions::SessionConfig;
 use crate::PolicyError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -44,6 +45,10 @@ pub struct ExecutionConfig {
     pub deny_scripts: bool,
     #[serde(default = "default_true")]
     pub deny_lolbins: bool,
+    #[serde(default)]
+    pub allow_binaries: Vec<String>,
+    #[serde(default)]
+    pub allow_inline_shell: bool,
     #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u32,
     #[serde(default = "default_memory_mb")]
@@ -58,6 +63,15 @@ pub struct ExecutionConfig {
     pub cet_shadow_stack: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceMode {
+    #[default]
+    InPlace,
+    #[serde(rename = "session-copy", alias = "session_copy")]
+    SessionCopy,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct FilesystemConfig {
     #[serde(default)]
@@ -66,6 +80,24 @@ pub struct FilesystemConfig {
     pub workspace_write: Vec<String>,
     #[serde(default)]
     pub denied_prefixes: Vec<String>,
+    #[serde(default)]
+    pub workspace_mode: WorkspaceMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct DestinationAlias {
+    pub alias: String,
+    pub host: String,
+    #[serde(default)]
+    pub methods: Vec<String>,
+    #[serde(default)]
+    pub paths: Vec<String>,
+    #[serde(default)]
+    pub bind_grant: Option<String>,
+    #[serde(default)]
+    pub max_bytes_total: Option<u64>,
+    #[serde(default)]
+    pub max_requests: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -80,6 +112,8 @@ pub struct NetworkConfig {
     pub allow_metadata_ips: bool,
     #[serde(default)]
     pub allowed_destinations: Vec<String>,
+    #[serde(default)]
+    pub destinations: Vec<DestinationAlias>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,6 +133,21 @@ impl Default for CredentialsConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ApprovalRule {
+    pub action: String,
+    #[serde(default)]
+    pub methods: Vec<String>,
+    #[serde(default)]
+    pub hosts: Vec<String>,
+    #[serde(default)]
+    pub paths: Vec<String>,
+    #[serde(default)]
+    pub binaries: Vec<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApprovalConfig {
     #[serde(default = "default_true")]
@@ -107,6 +156,8 @@ pub struct ApprovalConfig {
     pub require_on_network_post: bool,
     #[serde(default = "default_ttl_secs")]
     pub default_ttl_secs: u64,
+    #[serde(default)]
+    pub require_for: Vec<ApprovalRule>,
 }
 
 impl Default for ApprovalConfig {
@@ -115,8 +166,19 @@ impl Default for ApprovalConfig {
             require_on_write: true,
             require_on_network_post: true,
             default_ttl_secs: default_ttl_secs(),
+            require_for: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct OperatorForbidConfig {
+    #[serde(default)]
+    pub binaries: Vec<String>,
+    #[serde(default)]
+    pub hosts: Vec<String>,
+    #[serde(default)]
+    pub paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -156,6 +218,10 @@ pub struct PolicyManifest {
     pub approvals: ApprovalConfig,
     #[serde(default)]
     pub audit: AuditConfig,
+    #[serde(default)]
+    pub operator_forbid: OperatorForbidConfig,
+    #[serde(default)]
+    pub session: Option<SessionConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -269,7 +335,7 @@ impl CompiledPolicy {
             .collect();
 
         let mut destination_rules = Vec::with_capacity(manifest.network.allowed_destinations.len());
-        for pat in &manifest.network.allowed_destinations {
+        let mut push_dest_pat = |pat: &str| -> Result<(), PolicyError> {
             let (scheme, host, port, raw_path) = parse_canonical_destination(pat)
                 .map_err(|e| PolicyError::Validation(format!("allowed_destination '{pat}': {e}")))?;
             let (path_prefix, allow_subpaths) = if let Some(stripped) = raw_path.strip_suffix("/**") {
@@ -291,6 +357,30 @@ impl CompiledPolicy {
                 path_prefix,
                 allow_subpaths,
             });
+            Ok(())
+        };
+
+        for pat in &manifest.network.allowed_destinations {
+            push_dest_pat(pat)?;
+        }
+        for alias in &manifest.network.destinations {
+            let base = if alias.host.contains("://") {
+                alias.host.trim_end_matches('/').to_string()
+            } else {
+                format!("https://{}", alias.host.trim_end_matches('/'))
+            };
+            if alias.paths.is_empty() {
+                push_dest_pat(&format!("{base}/**"))?;
+            } else {
+                for p in &alias.paths {
+                    let clean_p = if p.starts_with('/') {
+                        p.clone()
+                    } else {
+                        format!("/{p}")
+                    };
+                    push_dest_pat(&format!("{base}{clean_p}"))?;
+                }
+            }
         }
 
         Ok(Self {
@@ -299,6 +389,17 @@ impl CompiledPolicy {
             write_roots,
             denied_prefixes_raw_lc,
             destination_rules,
+        })
+    }
+
+    pub fn resolve_destination_alias(&self, alias_or_host: &str) -> Option<&DestinationAlias> {
+        self.manifest.network.destinations.iter().find(|d| {
+            d.alias.eq_ignore_ascii_case(alias_or_host)
+                || d.host.eq_ignore_ascii_case(alias_or_host)
+                || d.host
+                    .strip_prefix("https://")
+                    .or_else(|| d.host.strip_prefix("http://"))
+                    .is_some_and(|h| h.split(['/', ':']).next().is_some_and(|hn| hn.eq_ignore_ascii_case(alias_or_host)))
         })
     }
 }

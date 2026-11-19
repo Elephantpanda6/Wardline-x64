@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use std::collections::HashSet;
+
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
@@ -9,15 +11,18 @@ use wardline_core::path::{is_host_prefix_match, normalize_host_lexical_path};
 use wardline_core::{IsolationLevel, TargetArch};
 use zeroize::ZeroizeOnDrop;
 
-use crate::crl::CrlStore;
+use crate::crl::{CrlStore, RevocationList};
 use crate::CertError;
 
 const CERT_SIG_DOMAIN: &[u8] = b"wardline.cert.v1\0";
+pub const MAX_CHAIN_DEPTH: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CapabilityClaim {
     pub cert_id: Uuid,
     pub parent_id: Option<Uuid>,
+    #[serde(default)]
+    pub lineage: Vec<Uuid>,
     pub subject: String,
     pub issued_at_unix: u64,
     pub expires_at_unix: u64,
@@ -80,6 +85,7 @@ impl CertAuthority {
         let claim = CapabilityClaim {
             cert_id: Uuid::new_v4(),
             parent_id: None,
+            lineage: Vec::new(),
             subject: subject.into(),
             issued_at_unix,
             expires_at_unix,
@@ -119,9 +125,17 @@ impl CertAuthority {
                 "parent delegation_depth_remaining is exhausted".into(),
             ));
         }
+        if parent.nodes.len() >= MAX_CHAIN_DEPTH {
+            return Err(CertError::AttenuationViolation(format!(
+                "delegation chain exceeds MAX_CHAIN_DEPTH={MAX_CHAIN_DEPTH}"
+            )));
+        }
+        let mut lineage = leaf.claim.lineage.clone();
+        lineage.push(leaf.claim.cert_id);
         let child_claim = CapabilityClaim {
             cert_id: Uuid::new_v4(),
             parent_id: Some(leaf.claim.cert_id),
+            lineage,
             subject: next_subject.into(),
             issued_at_unix,
             expires_at_unix,
@@ -308,18 +322,64 @@ pub fn verify_cert_chain<'a>(
     crl: Option<&CrlStore>,
     now_unix: u64,
 ) -> Result<&'a CapabilityClaim, CertError> {
-    let first = chain.nodes.first().ok_or(CertError::EmptyChain)?;
-    if first.claim.parent_id.is_some() {
+    verify_cert_chain_with_revocations(root_pubkey, chain, crl, None, now_unix)
+}
+
+pub fn verify_cert_chain_with_revocations<'a>(
+    root_pubkey: &[u8; 32],
+    chain: &'a WardCertChain,
+    crl: Option<&CrlStore>,
+    revocations: Option<&RevocationList>,
+    now_unix: u64,
+) -> Result<&'a CapabilityClaim, CertError> {
+    if chain.nodes.is_empty() {
+        return Err(CertError::EmptyChain);
+    }
+    if chain.nodes.len() > MAX_CHAIN_DEPTH {
+        return Err(CertError::AttenuationViolation(format!(
+            "certificate chain length {} exceeds MAX_CHAIN_DEPTH={MAX_CHAIN_DEPTH}",
+            chain.nodes.len()
+        )));
+    }
+    let first = &chain.nodes[0];
+    if first.claim.parent_id.is_some() || !first.claim.lineage.is_empty() {
         return Err(CertError::AttenuationViolation(
-            "root certificate cannot declare parent_id".into(),
+            "root certificate cannot declare parent_id or lineage".into(),
         ));
     }
 
     let mut signer_pubkey = *root_pubkey;
     let mut prev_claim: Option<&CapabilityClaim> = None;
+    let mut expected_lineage: Vec<Uuid> = Vec::with_capacity(chain.nodes.len());
+    let mut visited: HashSet<Uuid> = HashSet::with_capacity(chain.nodes.len());
+
+    let is_id_revoked = |id: Uuid| -> Result<bool, CertError> {
+        if let Some(store) = crl {
+            if store.is_revoked(id)? {
+                return Ok(true);
+            }
+        }
+        if let Some(list) = revocations {
+            if list.is_revoked(id) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    };
 
     for node in &chain.nodes {
         verify_sig(&signer_pubkey, &node.claim, &node.signature)?;
+
+        if !visited.insert(node.claim.cert_id) {
+            return Err(CertError::AttenuationViolation(
+                "cyclic certificate ID detected in delegation chain".into(),
+            ));
+        }
+        if node.claim.lineage != expected_lineage {
+            return Err(CertError::AttenuationViolation(
+                "signed lineage ancestry does not match chain hierarchy".into(),
+            ));
+        }
 
         if now_unix < node.claim.issued_at_unix {
             return Err(CertError::NotYetValid {
@@ -333,15 +393,21 @@ pub fn verify_cert_chain<'a>(
                 now: now_unix,
             });
         }
-        if let Some(store) = crl {
-            if store.is_revoked(node.claim.cert_id)? {
-                return Err(CertError::Revoked(node.claim.cert_id));
+
+        for &ancestor in &node.claim.lineage {
+            if is_id_revoked(ancestor)? {
+                return Err(CertError::Revoked(ancestor));
             }
         }
+        if is_id_revoked(node.claim.cert_id)? {
+            return Err(CertError::Revoked(node.claim.cert_id));
+        }
+
         if let Some(parent) = prev_claim {
             validate_monotonic_attenuation(parent, &node.claim)?;
         }
 
+        expected_lineage.push(node.claim.cert_id);
         signer_pubkey = node.claim.holder_pubkey;
         prev_claim = Some(&node.claim);
     }
@@ -431,5 +497,90 @@ mod tests {
             }],
         );
         assert!(widened.is_err());
+    }
+
+    #[test]
+    fn lineage_subtree_revocation_and_max_depth() {
+        let root = CertAuthority::generate();
+        let a1 = CertAuthority::generate();
+        let a2 = CertAuthority::generate();
+        let a3 = CertAuthority::generate();
+
+        let root_chain = root
+            .issue_root(
+                "root",
+                a1.public_key_bytes(),
+                1000,
+                5000,
+                IsolationLevel::L1,
+                None,
+                8,
+                vec![CapabilityScope::FsRead { root: ".".into() }],
+            )
+            .unwrap();
+        let child_a = a1
+            .delegate(
+                &root_chain,
+                "branch-a",
+                a2.public_key_bytes(),
+                1001,
+                4000,
+                IsolationLevel::L1,
+                None,
+                vec![CapabilityScope::FsRead { root: ".".into() }],
+            )
+            .unwrap();
+        let grandchild = a2
+            .delegate(
+                &child_a,
+                "leaf-a",
+                a3.public_key_bytes(),
+                1002,
+                3000,
+                IsolationLevel::L1,
+                None,
+                vec![CapabilityScope::FsRead { root: ".".into() }],
+            )
+            .unwrap();
+        let child_b = a1
+            .delegate(
+                &root_chain,
+                "branch-b",
+                a3.public_key_bytes(),
+                1001,
+                4000,
+                IsolationLevel::L1,
+                None,
+                vec![CapabilityScope::FsRead { root: ".".into() }],
+            )
+            .unwrap();
+
+        let rev_path = std::env::temp_dir().join(format!("wardline_rev_t_{}.json", Uuid::new_v4()));
+        let mut rev = RevocationList::default();
+        // Revoke intermediate branch-a -> grandchild subtree fails, sibling branch-b stays valid
+        rev.add(child_a.nodes[1].claim.cert_id);
+        rev.save_json_file(&rev_path).unwrap();
+        let loaded = RevocationList::from_json_file(&rev_path).unwrap();
+
+        assert!(matches!(
+            verify_cert_chain_with_revocations(
+                &root.public_key_bytes(),
+                &grandchild,
+                None,
+                Some(&loaded),
+                1200,
+            ),
+            Err(CertError::Revoked(id)) if id == child_a.nodes[1].claim.cert_id
+        ));
+        assert!(verify_cert_chain_with_revocations(
+            &root.public_key_bytes(),
+            &child_b,
+            None,
+            Some(&loaded),
+            1200,
+        )
+        .is_ok());
+
+        let _ = std::fs::remove_file(rev_path);
     }
 }

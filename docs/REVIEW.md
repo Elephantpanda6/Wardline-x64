@@ -1,0 +1,15 @@
+# Independent Architecture & Security Review Summary
+
+## Scope Reviewed
+This review covers the multi-architecture Wardline capability runtime (`Wardline-x64` and `Wardline-ARM64`), including the C-ABI v2 Zig kernel shims, `wardline-platform` OS FFI quarantine crate, `wardline-policy` argv/operator engine, `wardline-cert` Ed25519 subtree-revocation authority, `wardline-vault` host-custody AEAD vault, `wardline-egress` RFC 9110/SSRF-pinned proxy, `wardline-log` BLAKE3+Merkle WAL with panic freeze, `wardline-mcp` JSON-RPC 2.0 bridge & wrapper proxy, `wardline-guest-agent` MicroVM init agent, and the 4 language SDKs (Rust, Python, TypeScript, Go).
+
+## Architectural Strengths Verified
+1. **Strict `#![forbid(unsafe_code)]` Core**: All 13 policy, crypto, broker, MCP, audit, CLI, guest-agent, and client crates contain zero `unsafe` blocks. Platform FFI (`wardline-platform`) and Zig spawn C-ABI (`wardline-sandbox`) are explicitly quarantined.
+2. **Fail-Closed Isolation Guarantee**: Both native kernel sandboxing (`JobObject` + `AppContainer` + `ACG`/`CET`/`Win32k`/`NonMsBinaries` on Windows, `Landlock ABI` + 22-syscall `seccomp-bpf` + `PR_SET_NO_NEW_PRIVS` + `cgroup v2` on Linux, Seatbelt SBPL + `(deny process-fork)` on macOS, `rlimit` + `setproctitle`/sandbox controls on FreeBSD) and L1.5/L2 backends (`gVisor`, `Firecracker`, `Hyper-V HCS`, `Virtualization.framework`) reject weaker fallback when a stronger tier is unavailable.
+3. **Zero-Secret Adapter & Child Custody**: `wardline-mcp`, `wardline-cli`, and wrapped MCP child processes never receive raw decrypted vault credentials. `VaultStore::store_secret_from_file` verifies owner-only ACLs, `SecretBytes` redacts `Debug` output and locks memory pages via `mlock`/`VirtualLock`, and `rotate_master_key()` re-keys ciphertexts atomically.
+4. **Immutable Operator Guardrails & Wrapper Defense**: `[operator_forbid]` rules sit ahead of policy/cert allowlists; `argv_shield` recursively unwraps nested wrappers (`env`, `timeout`, `nice`, `nohup`, `stdbuf`, `sudo`, `doas`, `busybox`) up to 8 layers, blocks `env -S`/`--split-string`, blocks inline `-c`/`-e`/`python -m`/`awk`, and uses version-tolerant binary matching without false prefix collisions.
+5. **Cryptographic Non-Equivocation Audit Trail**: Intent-before-dispatch (`ActionIntent` fsynced prior to child spawn/broker/network I/O), `ActionOutcome` closing on every termination/denial path, Ed25519 checkpoints, BLAKE3 Merkle inclusion proofs, and irreversible `.tainted` panic freeze lockouts.
+
+## Remaining Operational Hardening Notes
+- **L2 Guest Rootfs/Kernel Image Provisioning**: Production L2 Firecracker/HCS/Virtualization deployments must build and sign guest images via `images/build.sh` and `wardline image sign`, pinning the Ed25519 verifying key in deployment policy before production rollout.
+- **gVisor / MicroVM Host Prerequisites**: Linux `L1.5` requires `runsc` on `PATH`; `L2` requires `/dev/kvm` (Linux), Hyper-V HCS service (Windows Pro/Server), or Apple Silicon Virtualization entitlement (macOS). Hosts without these remain fail-closed (`SandboxInitError::IsolationUnavailable`).

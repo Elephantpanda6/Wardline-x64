@@ -1315,6 +1315,7 @@ dependencies = [
  "rand",
  "redb",
  "serde",
+ "serde_json",
  "thiserror",
  "uuid",
  "wardline-core",
@@ -1359,6 +1360,7 @@ version = "0.1.0"
 dependencies = [
  "httparse",
  "native-tls",
+ "redb",
  "serde",
  "thiserror",
  "url",
@@ -1376,7 +1378,6 @@ dependencies = [
  "base64",
  "clap",
  "hex",
- "libc",
  "serde",
  "serde_json",
  "thiserror",
@@ -1387,10 +1388,20 @@ dependencies = [
  "wardline-core",
  "wardline-egress",
  "wardline-log",
+ "wardline-platform",
  "wardline-policy",
  "wardline-sandbox",
  "wardline-vault",
- "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "wardline-guest-agent"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -1401,11 +1412,11 @@ dependencies = [
  "ciborium",
  "ed25519-dalek",
  "hex",
- "libc",
  "serde",
+ "serde_json",
  "thiserror",
  "wardline-core",
- "windows-sys 0.59.0",
+ "wardline-platform",
 ]
 
 [[package]]
@@ -1422,6 +1433,22 @@ dependencies = [
  "wardline-cert",
  "wardline-core",
  "wardline-guard",
+ "wardline-policy",
+ "wardline-sandbox",
+]
+
+[[package]]
+name = "wardline-platform"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "chacha20poly1305",
+ "libc",
+ "rand",
+ "thiserror",
+ "wardline-core",
+ "windows-sys 0.59.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -1438,9 +1465,15 @@ dependencies = [
 name = "wardline-sandbox"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
+ "hex",
  "serde",
+ "serde_json",
+ "sha2",
  "thiserror",
+ "uuid",
  "wardline-core",
+ "wardline-platform",
 ]
 
 [[package]]
@@ -1448,14 +1481,12 @@ name = "wardline-vault"
 version = "0.1.0"
 dependencies = [
  "base64",
- "blake3",
  "chacha20poly1305",
- "libc",
  "rand",
  "serde",
  "serde_json",
  "thiserror",
- "windows-sys 0.59.0",
+ "wardline-platform",
  "zeroize",
 ]
 

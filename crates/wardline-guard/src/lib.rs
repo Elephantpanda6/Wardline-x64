@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 pub mod daemon;
 pub mod file_broker;
 pub mod pipe_server;
@@ -7,9 +9,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use wardline_approval::ApprovalStore;
-use wardline_cert::CrlStore;
+use wardline_cert::{CrlStore, RevocationList};
+use wardline_egress::BudgetStore;
 use wardline_log::WalWriter;
-use wardline_policy::CompiledPolicy;
+use wardline_policy::{CompiledPolicy, SessionPhase, SessionState};
 use wardline_vault::VaultStore;
 
 pub use daemon::{GuardEngine, GuardRuntimeConfig};
@@ -34,6 +37,7 @@ pub struct GuardInitOptions<'a> {
     pub root_pubkey_hex: Option<&'a str>,
     pub require_cert: bool,
     pub seal_key_hex: Option<&'a str>,
+    pub revocation_file: Option<&'a Path>,
 }
 
 fn clean_canonical(p: &Path) -> PathBuf {
@@ -98,6 +102,16 @@ pub fn init_guard_engine(opts: GuardInitOptions<'_>) -> Result<GuardEngine> {
         .root_pubkey_hex
         .map(|h| decode_hex_32(h, "root-pubkey"))
         .transpose()?;
+    let revocation_list = opts
+        .revocation_file
+        .map(RevocationList::from_json_file)
+        .transpose()?;
+    let budgets = BudgetStore::open(state_dir.join("budgets.redb"))?;
+    let initial_phase = if policy.manifest.session.is_some() {
+        SessionPhase::Setup
+    } else {
+        SessionPhase::Run
+    };
 
     Ok(GuardEngine::new(GuardRuntimeConfig {
         policy,
@@ -105,6 +119,9 @@ pub fn init_guard_engine(opts: GuardInitOptions<'_>) -> Result<GuardEngine> {
         vault: Some(vault),
         approvals: Some(approvals),
         crl: Some(crl),
+        revocation_list,
+        budgets: Some(budgets),
+        session_state: Some(SessionState::new(initial_phase)),
         wal: Some(wal),
         cert_root_pubkey,
         require_cert: opts.require_cert,

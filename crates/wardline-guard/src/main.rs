@@ -33,6 +33,9 @@ struct Args {
     /// Optional 32-byte Ed25519 audit WAL seal signing seed (64 hex chars).
     #[arg(long)]
     seal_key: Option<String>,
+    /// Optional JSON certificate revocation list file.
+    #[arg(long)]
+    revocation_file: Option<PathBuf>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -44,6 +47,7 @@ fn main() -> anyhow::Result<()> {
         root_pubkey_hex: args.root_pubkey.as_deref(),
         require_cert: args.require_cert,
         seal_key_hex: args.seal_key.as_deref(),
+        revocation_file: args.revocation_file.as_deref(),
     })?;
     eprintln!(
         "{} listening on {} (policy={})",

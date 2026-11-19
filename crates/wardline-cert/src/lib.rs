@@ -4,9 +4,10 @@ pub mod cert;
 pub mod crl;
 
 pub use cert::{
-    verify_cert_chain, CapabilityClaim, CertAuthority, WardCertChain, WardCertNode,
+    verify_cert_chain, verify_cert_chain_with_revocations, CapabilityClaim, CertAuthority,
+    WardCertChain, WardCertNode, MAX_CHAIN_DEPTH,
 };
-pub use crl::{CrlEntry, CrlStore};
+pub use crl::{CrlEntry, CrlStore, RevocationList};
 
 use thiserror::Error;
 

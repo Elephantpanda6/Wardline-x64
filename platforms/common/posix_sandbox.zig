@@ -345,6 +345,7 @@ pub fn executePosixIsolated(
     sbpl_profile_z: ?[*:0]const u8,
 ) u32 {
     res.* = std.mem.zeroes(common.WlSpawnResult);
+    res.struct_size = @sizeOf(common.WlSpawnResult);
     res.emulation_detected = if (emulation_detected) 1 else 0;
     res.acg_applied = 0;
 

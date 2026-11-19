@@ -13,8 +13,10 @@ use wardline_policy::{evaluate_action, CompiledPolicy};
 use wardline_vault::{SecretBytes, StreamingScrubber, VaultStore};
 use zeroize::Zeroize;
 
+use crate::budgets::BudgetStore;
 use crate::ssrf::resolve_and_pin_addresses;
 use crate::EgressError;
+use wardline_policy::{method_is_token, request_target_is_clean};
 
 #[derive(Debug, Clone)]
 pub struct EgressRequest {
@@ -139,6 +141,16 @@ pub fn execute_egress_request(
     req: &EgressRequest,
     approval_bypass_granted: bool,
 ) -> Result<EgressResponse, EgressError> {
+    execute_egress_request_with_budgets(policy, vault, None, req, approval_bypass_granted)
+}
+
+pub fn execute_egress_request_with_budgets(
+    policy: &CompiledPolicy,
+    vault: Option<&VaultStore>,
+    budgets: Option<&BudgetStore>,
+    req: &EgressRequest,
+    approval_bypass_granted: bool,
+) -> Result<EgressResponse, EgressError> {
     let action = ActionRequest::NetworkRequest {
         method: req.method,
         url: req.url.clone(),
@@ -167,6 +179,30 @@ pub fn execute_egress_request(
         return Err(EgressError::BlockedDestination(
             "URL parser normalization differential rejected".into(),
         ));
+    }
+
+    let mut request_target = canon_path.clone();
+    if let Some(q) = parsed.query() {
+        request_target.push('?');
+        request_target.push_str(q);
+    }
+    if !request_target_is_clean(&request_target) {
+        return Err(EgressError::BlockedDestination(
+            "RFC 9110 request-target validation failed".into(),
+        ));
+    }
+
+    let alias_cfg = policy.resolve_destination_alias(&host).cloned();
+    let budget_key = alias_cfg
+        .as_ref()
+        .map(|a| a.alias.clone())
+        .unwrap_or_else(|| host.clone());
+    if let Some(b_store) = budgets {
+        let (max_b, max_r) = alias_cfg
+            .as_ref()
+            .map(|a| (a.max_bytes_total, a.max_requests))
+            .unwrap_or((None, None));
+        b_store.check_and_reserve_request(&budget_key, req.body.len() as u64, max_b, max_r)?;
     }
 
     let mut injected_header: Option<(String, SecretBytes)> = None;
@@ -201,12 +237,6 @@ pub fn execute_egress_request(
         Box::new(tcp)
     };
 
-    let mut request_target = canon_path.clone();
-    if let Some(q) = parsed.query() {
-        request_target.push('?');
-        request_target.push_str(q);
-    }
-
     let method_str = match req.method {
         NetMethod::Get => "GET",
         NetMethod::Head => "HEAD",
@@ -215,6 +245,9 @@ pub fn execute_egress_request(
         NetMethod::Patch => "PATCH",
         NetMethod::Delete => "DELETE",
     };
+    if !method_is_token(method_str) {
+        return Err(EgressError::PolicyDenied("invalid RFC 9110 method token".into()));
+    }
 
     let mut wire = Vec::with_capacity(512 + req.body.len());
     wire.extend_from_slice(format!("{method_str} {request_target} HTTP/1.1\r\n").as_bytes());
@@ -279,6 +312,10 @@ pub fn execute_egress_request(
             return Err(EgressError::ByteBudgetExceeded(max_bytes));
         }
         raw_resp.extend_from_slice(&chunk[..n]);
+    }
+    if let Some(b_store) = budgets {
+        let max_b = alias_cfg.and_then(|a| a.max_bytes_total);
+        b_store.record_received_bytes(&budget_key, total_read, max_b)?;
     }
 
     let mut hdr_buf = [httparse::EMPTY_HEADER; 256];

@@ -1,0 +1,10 @@
+version = 1
+name = "fuzz-seed"
+[execution]
+isolation = "L1"
+allow_binaries = ["cargo"]
+[filesystem]
+workspace_read = ["."]
+[network]
+egress_mode = "proxy_only"
+allowed_destinations = ["https://api.github.com/**"]

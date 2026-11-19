@@ -5,7 +5,7 @@ pub const win32 = if (builtin.os.tag == .windows) @import("win32_ffi.zig") else 
 pub const sandbox = if (builtin.os.tag == .windows) @import("sandbox_core.zig") else struct {};
 pub const posix = if (builtin.os.tag != .windows) @import("posix_sandbox.zig") else struct {};
 
-pub const abi_version: u32 = 1;
+pub const abi_version: u32 = 2;
 
 pub const WlArch = enum(u32) {
     unknown = 0,
@@ -29,10 +29,32 @@ pub const WL_ARM64_FEAT_SVE: u8 = 0x08;
 pub const WL_ARM64_FEAT_SVE2: u8 = 0x10;
 pub const WL_ARM64_FEAT_LARGE_PAGES: u8 = 0x20;
 
+pub const WL_TIER_BIT_L0: u32 = 0x01;
+pub const WL_TIER_BIT_L1: u32 = 0x02;
+pub const WL_TIER_BIT_L1_5: u32 = 0x04;
+pub const WL_TIER_BIT_L2: u32 = 0x08;
+
+pub const WL_FEAT_LANDLOCK: u64 = 1 << 0;
+pub const WL_FEAT_SECCOMP_BPF: u64 = 1 << 1;
+pub const WL_FEAT_USERNS: u64 = 1 << 2;
+pub const WL_FEAT_CGROUP_V2: u64 = 1 << 3;
+pub const WL_FEAT_GVISOR_RUNSC: u64 = 1 << 4;
+pub const WL_FEAT_FIRECRACKER: u64 = 1 << 5;
+pub const WL_FEAT_KVM: u64 = 1 << 6;
+pub const WL_FEAT_WIN_APPCONTAINER: u64 = 1 << 7;
+pub const WL_FEAT_WIN_LOWBOX: u64 = 1 << 8;
+pub const WL_FEAT_WIN_HCS: u64 = 1 << 9;
+pub const WL_FEAT_MACOS_SEATBELT: u64 = 1 << 10;
+pub const WL_FEAT_MACOS_VZ: u64 = 1 << 11;
+pub const WL_FEAT_FREEBSD_CAPSICUM: u64 = 1 << 12;
+pub const WL_FEAT_FREEBSD_BHYVE: u64 = 1 << 13;
+
 pub const WlIsolationLevel = enum(u32) {
-    l0_restricted_job = 0,
-    l1_appcontainer = 1,
-    l2_microvm = 2,
+    unisolated = 0,
+    l0_restricted_job = 1,
+    l1_appcontainer = 2,
+    l1_5_hardened = 3,
+    l2_microvm = 4,
 };
 
 pub const WlPeClass = enum(u32) {
@@ -77,11 +99,17 @@ pub const WlStatusCode = enum(u32) {
     probe = 13,
     memory_limit = 14,
     io = 15,
+    isolation_unavailable = 16,
 };
 
 pub const WlHostCapabilities = extern struct {
-    arch: u32,
+    struct_size: u32,
     abi_version: u32,
+    arch: u32,
+    os_build_number: u32,
+    page_size: u32,
+    tier_support_mask: u32,
+    feature_flags: u64,
     is_wow64_emulated: u8,
     cet_shadow_stack_supported: u8,
     pac_bti_available: u8,
@@ -90,11 +118,14 @@ pub const WlHostCapabilities = extern struct {
     job_object_iocp_supported: u8,
     os_kind: u8,
     arm64_ext_flags: u8,
-    os_build_number: u32,
-    page_size: u32,
+    landlock_abi: u8,
+    cgroup_v2_available: u8,
+    reserved: [6]u8,
 };
 
 pub const WlSpawnRequest = extern struct {
+    struct_size: u32,
+    abi_version: u32,
     executable_utf8: ?[*]const u8,
     executable_len: usize,
     cmdline_utf8: ?[*]const u8,
@@ -119,7 +150,9 @@ pub const WlSpawnRequest = extern struct {
     enable_acg: u8,
     enable_cet: u8,
     capture_output: u8,
-    reserved: [3]u8,
+    disable_win32k: u8,
+    block_non_ms_binaries: u8,
+    single_process_mode: u8,
 };
 
 pub const WlIoBuffers = extern struct {
@@ -132,6 +165,7 @@ pub const WlIoBuffers = extern struct {
 };
 
 pub const WlSpawnResult = extern struct {
+    struct_size: u32,
     status_code: u32,
     win32_error: u32,
     exit_code: u32,
@@ -146,6 +180,32 @@ pub const WlSpawnResult = extern struct {
     stderr_len: usize,
     detail_len: usize,
 };
+
+pub fn validateCapsPtr(out_caps: ?*WlHostCapabilities) ?*WlHostCapabilities {
+    const caps = out_caps orelse return null;
+    if (caps.struct_size != 0 and caps.struct_size != @sizeOf(WlHostCapabilities)) {
+        return null;
+    }
+    return caps;
+}
+
+pub fn validateSpawnReq(req: *const WlSpawnRequest, io: *WlIoBuffers, res: *WlSpawnResult) bool {
+    if (req.struct_size != @sizeOf(WlSpawnRequest) or req.abi_version != abi_version) {
+        res.* = std.mem.zeroes(WlSpawnResult);
+        res.struct_size = @sizeOf(WlSpawnResult);
+        writeDetail(io, res, "ABI v2 WlSpawnRequest struct_size or abi_version mismatch");
+        res.status_code = @intFromEnum(WlStatusCode.invalid_arg);
+        return false;
+    }
+    if (req.isolation_level == @intFromEnum(WlIsolationLevel.unisolated)) {
+        res.* = std.mem.zeroes(WlSpawnResult);
+        res.struct_size = @sizeOf(WlSpawnResult);
+        writeDetail(io, res, "isolation_level=unisolated cannot be launched through containment engine");
+        res.status_code = @intFromEnum(WlStatusCode.invalid_arg);
+        return false;
+    }
+    return true;
+}
 
 pub const IMAGE_FILE_MACHINE_I386: u16 = 0x014C;
 pub const IMAGE_FILE_MACHINE_AMD64: u16 = 0x8664;
@@ -361,4 +421,10 @@ test "classifyBinaryBytes detects ELF64 and Mach-O headers" {
     try std.testing.expectEqual(WlBinaryFormat.macho_universal, m_fat.format);
     try std.testing.expect(m_fat.has_arm64);
     try std.testing.expect(m_fat.has_amd64);
+}
+
+test "C-ABI v2 struct sizes match C contract" {
+    try std.testing.expectEqual(@as(usize, 48), @sizeOf(WlHostCapabilities));
+    try std.testing.expectEqual(@as(usize, 152), @sizeOf(WlSpawnRequest));
+    try std.testing.expectEqual(@as(usize, 64), @sizeOf(WlSpawnResult));
 }

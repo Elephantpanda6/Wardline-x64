@@ -10,8 +10,10 @@ path = "src/main.rs"
 
 [dependencies]
 wardline-core.workspace = true
+wardline-policy.workspace = true
 wardline-cert.workspace = true
 wardline-guard.workspace = true
+wardline-sandbox.workspace = true
 base64.workspace = true
 clap.workspace = true
 serde.workspace = true

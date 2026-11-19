@@ -1,9 +1,11 @@
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use base64::engine::general_purpose::STANDARD as B64;
@@ -12,29 +14,43 @@ use clap::{Parser, Subcommand, ValueEnum};
 use uuid::Uuid;
 use wardline_approval::ApprovalStore;
 use wardline_cert::{
-    verify_cert_chain, CertAuthority, CrlStore, WardCertChain,
+    verify_cert_chain, verify_cert_chain_with_revocations, CertAuthority, CrlStore, RevocationList,
+    WardCertChain,
 };
 use wardline_core::binary::{inspect_binary_file, BinaryFormat};
 use wardline_core::capability::CapabilityScope;
 use wardline_core::path::{normalize_host_lexical_path, validate_safe_host_path};
 use wardline_core::pe::PeClass;
 use wardline_core::{
-    detect_host_platform_profile, ActionRequest, IsolationLevel, NetMethod, TargetArch, TargetOs,
+    detect_host_platform_profile, ActionRequest, Decision, IsolationLevel, NetMethod, TargetArch,
+    TargetOs,
 };
 use wardline_guard::{
     decode_hex_32, init_guard_engine, send_pipe_request, serve_hardened_pipe, GuardInitOptions,
     GuardRequest, GuardResponse, DEFAULT_PIPE_NAME,
 };
-use wardline_log::{read_log_frames, AuditEvent, WalWriter};
+use wardline_log::{
+    compute_stats, create_signed_checkpoint, export_events, query_events, read_log_frames,
+    trigger_panic_freeze, write_checkpoint_file, AuditEvent, EventFilter, ExportFormat, MerkleTree,
+    WalWriter,
+};
+use wardline_mcp::learn::LearnRecorder;
+use wardline_mcp::registry::{check_server_entry, McpRegistry, McpServerEntry};
+use wardline_mcp::wrap::{WrapConfig, WrappedMcpProxy};
 use wardline_mcp::{McpServer, NamedPipeTransport};
-use wardline_policy::{evaluate_action, CompiledPolicy, ExecContext};
+use wardline_policy::{
+    evaluate_action, evaluate_action_explained, render_policy_summary, CompiledPolicy, ExecContext,
+};
+use wardline_sandbox::{
+    probe_capabilities, select_backend_for_tier, sign_golden_image_dir, verify_golden_image_dir,
+};
 use wardline_vault::{SecretGrant, VaultStore};
 
 #[derive(Parser)]
 #[command(
     name = "wardline",
     version,
-    about = "Clean-room Windows capability boundary, credential vault & sandbox runtime"
+    about = "Clean-room cross-platform capability boundary, credential vault & sandbox runtime"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -43,16 +59,21 @@ struct Cli {
 
 #[derive(Clone, Copy, ValueEnum)]
 enum CliIsolation {
+    Unisolated,
     L0,
     L1,
+    #[value(name = "l1.5", alias = "L1.5", alias = "l1_5")]
+    L1_5,
     L2,
 }
 
 impl From<CliIsolation> for IsolationLevel {
     fn from(v: CliIsolation) -> Self {
         match v {
+            CliIsolation::Unisolated => IsolationLevel::Unisolated,
             CliIsolation::L0 => IsolationLevel::L0,
             CliIsolation::L1 => IsolationLevel::L1,
+            CliIsolation::L1_5 => IsolationLevel::L1_5,
             CliIsolation::L2 => IsolationLevel::L2,
         }
     }
@@ -95,7 +116,7 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Execute a native PE tool inside L0/L1 Windows containment governed by policy.
+    /// Execute a native executable inside host isolation governed by policy.
     Run {
         #[arg(long, default_value = "schemas/wardline.v1.toml")]
         policy: PathBuf,
@@ -105,7 +126,7 @@ enum Commands {
         base_dir: Option<PathBuf>,
         #[arg(long)]
         state_dir: Option<PathBuf>,
-        #[arg(long)]
+        #[arg(long, alias = "approval-ticket")]
         ticket: Option<Uuid>,
         #[arg(long)]
         root_pubkey: Option<String>,
@@ -113,6 +134,18 @@ enum Commands {
         cert: Option<PathBuf>,
         #[arg(long)]
         seal_key: Option<String>,
+        #[arg(long)]
+        revocation_file: Option<PathBuf>,
+        #[arg(long, value_enum)]
+        isolation: Option<CliIsolation>,
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        #[arg(long, default_value_t = false)]
+        unsafe_no_isolation: bool,
+        #[arg(long, default_value_t = false)]
+        learn: bool,
+        #[arg(long)]
+        learn_out: Option<PathBuf>,
         #[arg(long)]
         json: bool,
         executable: String,
@@ -137,7 +170,7 @@ enum Commands {
         headers: Vec<String>,
         #[arg(long)]
         body: Option<String>,
-        #[arg(long)]
+        #[arg(long, alias = "approval-ticket")]
         ticket: Option<Uuid>,
         #[arg(long)]
         root_pubkey: Option<String>,
@@ -146,25 +179,55 @@ enum Commands {
         #[arg(long)]
         seal_key: Option<String>,
         #[arg(long)]
+        revocation_file: Option<PathBuf>,
+        #[arg(long)]
         json: bool,
         url: String,
     },
-    /// Validate or dry-run evaluate a TOML v1 policy manifest.
+    /// Evaluate whether a destination URL/alias is allowed under policy rules with remediation hints.
+    #[command(name = "check-net")]
+    CheckNet {
+        #[arg(long, default_value = "schemas/wardline.v1.toml")]
+        policy: PathBuf,
+        #[arg(long, value_enum, default_value_t = CliMethod::Get)]
+        method: CliMethod,
+        #[arg(long)]
+        grant: Option<String>,
+        #[arg(long)]
+        json: bool,
+        url: String,
+    },
+    /// Validate, summarize, or dry-run evaluate a TOML v1 policy manifest.
     #[command(subcommand)]
     Policy(PolicyCmd),
     /// Manage Ed25519 WardCert keys, delegated certificates, and CRLs.
     #[command(subcommand)]
     Cert(CertCmd),
-    /// Manage DPAPI + ChaCha20-Poly1305 destination-bound secrets.
+    /// Manage DPAPI / locked custody ChaCha20-Poly1305 destination-bound secrets.
     #[command(subcommand)]
     Vault(VaultCmd),
     /// Review and grant or deny durable approval tickets.
     #[command(subcommand)]
     Approve(ApproveCmd),
-    /// Inspect and verify tamper-evident BLAKE3/Ed25519 audit logs.
+    /// Inspect, verify, query, export, and prove tamper-evident BLAKE3/Ed25519 audit logs.
     #[command(subcommand)]
     Audit(AuditCmd),
-    /// Start the hardened FILE_FLAG_FIRST_PIPE_INSTANCE Named Pipe daemon.
+    /// Trigger an irreversible fail-closed audit log panic freeze (.tainted marker + WAL record).
+    Panic {
+        #[arg(long, default_value = ".wardline/audit.wlog")]
+        log: PathBuf,
+        #[arg(long, default_value = "operator panic freeze")]
+        reason: String,
+        #[arg(long)]
+        seal_key: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Sign and verify Ed25519 golden guest images for L1.5/L2 MicroVM isolation.
+    #[command(subcommand)]
+    Image(ImageCmd),
+    /// Start the hardened IPC guard daemon (Named Pipe on Windows, Unix socket with SO_PEERCRED on Unix).
+    #[command(alias = "serve")]
     GuardServe {
         #[arg(long, default_value = "schemas/wardline.v1.toml")]
         policy: PathBuf,
@@ -180,17 +243,41 @@ enum Commands {
         require_cert: bool,
         #[arg(long)]
         seal_key: Option<String>,
+        #[arg(long)]
+        revocation_file: Option<PathBuf>,
+        #[arg(long, default_value_t = false)]
+        background: bool,
     },
-    /// Run thin zero-secret stdio JSON-RPC 2.0 MCP adapter connected to wardline-guard.
+    /// Serve native MCP stdio bridge, wrap untrusted third-party MCP servers, or manage server registry.
     Mcp {
+        #[command(subcommand)]
+        action: Option<McpSubcommand>,
         #[arg(long, default_value = DEFAULT_PIPE_NAME)]
         pipe: String,
+        #[arg(long, default_value_t = false)]
+        learn: bool,
+        #[arg(long)]
+        policy: Option<PathBuf>,
+        #[arg(long)]
+        learn_out: Option<PathBuf>,
+    },
+    /// Run a self-contained offline cross-pillar security and hardware capability demonstration.
+    Demo {
+        #[arg(long)]
+        json: bool,
     },
 }
 
 #[derive(Subcommand)]
 enum PolicyCmd {
-    /// Parse and validate a TOML v1 policy manifest.
+    /// Display an effective human-readable or JSON summary of a TOML policy manifest.
+    Show {
+        #[arg(long, default_value = "schemas/wardline.v1.toml")]
+        policy: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate a TOML v1 policy manifest.
     Validate {
         path: PathBuf,
         #[arg(long)]
@@ -275,7 +362,25 @@ enum CertCmd {
         #[arg(long)]
         out: PathBuf,
     },
-    /// Verify signatures, expiry, monotonic attenuation, and optional CRL revocation.
+    /// Inspect a WardCert JSON chain (subjects, lineage IDs, expiry, scopes).
+    Inspect {
+        #[arg(long)]
+        cert: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List revoked WardCert IDs in CRL storage and/or an external JSON revocation list.
+    List {
+        #[arg(long, default_value = ".wardline")]
+        state_dir: PathBuf,
+        #[arg(long)]
+        crl_db: Option<PathBuf>,
+        #[arg(long)]
+        revocation_file: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify signatures, expiry, monotonic attenuation, and optional CRL / JSON revocation list.
     Verify {
         #[arg(long)]
         root_pubkey: String,
@@ -286,14 +391,18 @@ enum CertCmd {
         #[arg(long)]
         crl_db: Option<PathBuf>,
         #[arg(long)]
+        revocation_file: Option<PathBuf>,
+        #[arg(long)]
         json: bool,
     },
-    /// Revoke a WardCert UUID durably in the CRL database.
+    /// Revoke a WardCert UUID durably in the CRL database (and optional JSON revocation list).
     Revoke {
         #[arg(long, default_value = ".wardline")]
         state_dir: PathBuf,
         #[arg(long)]
         crl_db: Option<PathBuf>,
+        #[arg(long)]
+        revocation_file: Option<PathBuf>,
         #[arg(long)]
         cert_id: Uuid,
         #[arg(long, default_value = "revoked by operator")]
@@ -319,8 +428,19 @@ enum VaultCmd {
         value_prefix: String,
         #[arg(long)]
         secret: Option<String>,
-        #[arg(long)]
+        #[arg(long, alias = "value-env")]
         secret_env: Option<String>,
+        #[arg(long)]
+        value_file: Option<PathBuf>,
+        #[arg(long, default_value_t = false)]
+        unsafe_allow_cli_value: bool,
+    },
+    /// Rotate the host-sealed vault master key and re-encrypt all entries atomically.
+    Rotate {
+        #[arg(long, default_value = ".wardline")]
+        state_dir: PathBuf,
+        #[arg(long)]
+        json: bool,
     },
     /// List configured vault grants (metadata only; never decrypts secret bytes).
     List {
@@ -338,12 +458,17 @@ enum ApproveCmd {
         #[arg(long, default_value = ".wardline")]
         state_dir: PathBuf,
         #[arg(long)]
+        store: Option<PathBuf>,
+        #[arg(long)]
         json: bool,
     },
     /// Approve a pending action ticket.
+    #[command(alias = "approve")]
     Grant {
         #[arg(long, default_value = ".wardline")]
         state_dir: PathBuf,
+        #[arg(long)]
+        store: Option<PathBuf>,
         #[arg(long)]
         ticket: Uuid,
         #[arg(long, default_value = "operator")]
@@ -356,6 +481,8 @@ enum ApproveCmd {
         #[arg(long, default_value = ".wardline")]
         state_dir: PathBuf,
         #[arg(long)]
+        store: Option<PathBuf>,
+        #[arg(long)]
         ticket: Uuid,
         #[arg(long, default_value = "operator")]
         approver: String,
@@ -364,26 +491,56 @@ enum ApproveCmd {
     Sweep {
         #[arg(long, default_value = ".wardline")]
         state_dir: PathBuf,
+        #[arg(long)]
+        store: Option<PathBuf>,
+    },
+    /// Poll pending approval tickets at a fixed interval.
+    Watch {
+        #[arg(long, default_value = ".wardline")]
+        state_dir: PathBuf,
+        #[arg(long)]
+        store: Option<PathBuf>,
+        #[arg(long, default_value_t = 500)]
+        interval_ms: u64,
+        #[arg(long)]
+        max_polls: Option<usize>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Export an offline JSON snapshot of approval store state.
+    Snapshot {
+        #[arg(long, default_value = ".wardline")]
+        state_dir: PathBuf,
+        #[arg(long)]
+        store: Option<PathBuf>,
+        #[arg(long)]
+        out: PathBuf,
     },
 }
 
 #[derive(Subcommand)]
 enum AuditCmd {
-    /// Verify the BLAKE3 hash chain and optional Ed25519 seals in a `.wlog` file.
+    /// Verify the BLAKE3 hash chain, optional Ed25519 seals, and optional signed Merkle checkpoint.
     Verify {
         #[arg(long)]
         log: PathBuf,
         #[arg(long)]
         seal_pubkey: Option<String>,
         #[arg(long)]
+        checkpoint: Option<PathBuf>,
+        #[arg(long)]
+        checkpoint_pubkey: Option<String>,
+        #[arg(long)]
         json: bool,
     },
-    /// Append an explicit signed checkpoint event to a `.wlog` audit log.
+    /// Append an explicit checkpoint event and optionally write a signed Merkle checkpoint file.
     Checkpoint {
         #[arg(long)]
         log: PathBuf,
         #[arg(long)]
         seal_key: Option<String>,
+        #[arg(long)]
+        out_dir: Option<PathBuf>,
     },
     /// Decode and display recorded audit frames from a `.wlog` file.
     Inspect {
@@ -391,6 +548,145 @@ enum AuditCmd {
         log: PathBuf,
         #[arg(long)]
         json: bool,
+    },
+    /// Query audit events filtered by session, action, or decision (newest-first).
+    Events {
+        #[arg(long)]
+        log: PathBuf,
+        #[arg(long)]
+        session_id: Option<String>,
+        #[arg(long)]
+        action: Option<String>,
+        #[arg(long)]
+        decision: Option<String>,
+        #[arg(long)]
+        limit: Option<usize>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Compute summary counts and Merkle root over an audit log.
+    Stats {
+        #[arg(long)]
+        log: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Export an audit log as JSON, JSONL, or CSV.
+    Export {
+        #[arg(long)]
+        log: PathBuf,
+        #[arg(long, default_value = "json")]
+        format: String,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Compute and verify a binary BLAKE3 Merkle inclusion proof for a frame index.
+    Proof {
+        #[arg(long)]
+        log: PathBuf,
+        #[arg(long)]
+        index: usize,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ImageCmd {
+    /// Sign kernel, rootfs, and optional snapshot assets with an Ed25519 golden image manifest.
+    Sign {
+        #[arg(long)]
+        dir: PathBuf,
+        #[arg(long)]
+        arch: String,
+        #[arg(long)]
+        kernel: String,
+        #[arg(long)]
+        rootfs: String,
+        #[arg(long)]
+        snapshot: Option<String>,
+        #[arg(long)]
+        seed_file: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify an Ed25519 golden guest image directory.
+    Verify {
+        #[arg(long)]
+        dir: PathBuf,
+        #[arg(long)]
+        pubkey: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum McpSubcommand {
+    /// Serve the native zero-secret MCP JSON-RPC 2.0 stdio bridge.
+    Serve {
+        #[arg(long, default_value = DEFAULT_PIPE_NAME)]
+        pipe: String,
+        #[arg(long, default_value_t = false)]
+        learn: bool,
+        #[arg(long)]
+        policy: Option<PathBuf>,
+        #[arg(long)]
+        learn_out: Option<PathBuf>,
+    },
+    /// Wrap a third-party stdio MCP server inside Wardline policy and sandbox gating.
+    Wrap {
+        #[arg(long)]
+        name: String,
+        #[arg(long, default_value = "schemas/wardline.v1.toml")]
+        policy: PathBuf,
+        #[arg(long, value_enum, default_value_t = CliIsolation::L1)]
+        isolation: CliIsolation,
+        #[arg(long, default_value = ".")]
+        working_dir: String,
+        #[arg(long)]
+        allow_tool: Vec<String>,
+        #[arg(long, default_value_t = false)]
+        learn: bool,
+        #[arg(long)]
+        learn_out: Option<PathBuf>,
+        #[arg(last = true, required = true)]
+        command: Vec<String>,
+    },
+    /// Manage the approved MCP server registry.
+    Servers {
+        #[command(subcommand)]
+        action: McpServersAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum McpServersAction {
+    Register {
+        #[arg(long)]
+        name: String,
+        #[arg(long, default_value = "wardline-mcp-servers.json")]
+        registry: PathBuf,
+        #[arg(long)]
+        policy: Option<String>,
+        #[arg(long, value_enum, default_value_t = CliIsolation::L1)]
+        isolation: CliIsolation,
+        #[arg(long)]
+        allow_tool: Vec<String>,
+        #[arg(last = true, required = true)]
+        command: Vec<String>,
+    },
+    List {
+        #[arg(long, default_value = "wardline-mcp-servers.json")]
+        registry: PathBuf,
+    },
+    Check {
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long, default_value = "wardline-mcp-servers.json")]
+        registry: PathBuf,
+        #[arg(long)]
+        policy: Option<PathBuf>,
     },
 }
 
@@ -576,6 +872,15 @@ fn resolve_exec_for_eval(raw: &str) -> PathBuf {
 
 fn handle_policy(cmd: PolicyCmd) -> Result<()> {
     match cmd {
+        PolicyCmd::Show { policy, json } => {
+            let raw = std::fs::read_to_string(&policy)?;
+            let compiled = CompiledPolicy::from_toml_str(&raw)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&compiled.manifest)?);
+            } else {
+                print!("{}", render_policy_summary(&compiled));
+            }
+        }
         PolicyCmd::Validate { path, json } => {
             let raw = std::fs::read_to_string(&path)?;
             let compiled = CompiledPolicy::from_toml_str(&raw)?;
@@ -704,6 +1009,59 @@ fn handle_policy(cmd: PolicyCmd) -> Result<()> {
 
 fn handle_cert(cmd: CertCmd) -> Result<()> {
     match cmd {
+        CertCmd::Inspect { cert, json } => {
+            let chain: WardCertChain = serde_json::from_str(&std::fs::read_to_string(&cert)?)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&chain)?);
+            } else {
+                println!("WardCert chain nodes={}", chain.nodes.len());
+                for (idx, n) in chain.nodes.iter().enumerate() {
+                    let c = &n.claim;
+                    println!(
+                        "  [{idx}] cert_id={} subject='{}' isolation={:?} expires={} depth_remaining={} lineage={:?} scopes={}",
+                        c.cert_id,
+                        c.subject,
+                        c.min_isolation,
+                        c.expires_at_unix,
+                        c.delegation_depth_remaining,
+                        c.lineage,
+                        c.scopes.len()
+                    );
+                }
+            }
+        }
+        CertCmd::List {
+            state_dir,
+            crl_db,
+            revocation_file,
+            json,
+        } => {
+            let crl_path = crl_db.unwrap_or_else(|| state_dir.join("crl.redb"));
+            let rev_list = revocation_file
+                .as_deref()
+                .map(RevocationList::from_json_file)
+                .transpose()?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "crl_db_path": crl_path,
+                        "crl_db_exists": crl_path.exists(),
+                        "revocation_list": rev_list,
+                    }))?
+                );
+            } else {
+                println!(
+                    "CRL DB: {} (exists={})",
+                    crl_path.display(),
+                    crl_path.exists()
+                );
+                if let Some(rl) = rev_list {
+                    let v = serde_json::to_value(&rl)?;
+                    println!("JSON revocation list: {v}");
+                }
+            }
+        }
         CertCmd::Keygen { out_seed, json } => {
             use rand::RngCore;
             let mut seed = [0u8; 32];
@@ -820,6 +1178,7 @@ fn handle_cert(cmd: CertCmd) -> Result<()> {
             cert,
             state_dir,
             crl_db,
+            revocation_file,
             json,
         } => {
             let pk = decode_hex_32(&root_pubkey, "root-pubkey")?;
@@ -829,7 +1188,21 @@ fn handle_cert(cmd: CertCmd) -> Result<()> {
                 default_db.exists().then_some(default_db)
             });
             let crl = crl_path.map(|p| CrlStore::open(&p)).transpose()?;
-            let leaf = verify_cert_chain(&pk, &chain, crl.as_ref(), unix_now_secs())?;
+            let rev = revocation_file
+                .as_deref()
+                .map(RevocationList::from_json_file)
+                .transpose()?;
+            let leaf = if rev.is_some() {
+                verify_cert_chain_with_revocations(
+                    &pk,
+                    &chain,
+                    crl.as_ref(),
+                    rev.as_ref(),
+                    unix_now_secs(),
+                )?
+            } else {
+                verify_cert_chain(&pk, &chain, crl.as_ref(), unix_now_secs())?
+            };
             if json {
                 println!("{}", serde_json::to_string_pretty(leaf)?);
             } else {
@@ -845,12 +1218,22 @@ fn handle_cert(cmd: CertCmd) -> Result<()> {
         CertCmd::Revoke {
             state_dir,
             crl_db,
+            revocation_file,
             cert_id,
             reason,
         } => {
             let db_path = crl_db.unwrap_or_else(|| state_dir.join("crl.redb"));
             let crl = CrlStore::open(&db_path)?;
             crl.revoke(cert_id, unix_now_secs(), reason)?;
+            if let Some(ref rf) = revocation_file {
+                let mut rl = if rf.exists() {
+                    RevocationList::from_json_file(rf)?
+                } else {
+                    RevocationList::default()
+                };
+                rl.add(cert_id);
+                rl.save_json_file(rf)?;
+            }
             println!("revoked cert_id={cert_id}");
         }
     }
@@ -868,14 +1251,14 @@ fn handle_vault(cmd: VaultCmd) -> Result<()> {
             value_prefix,
             secret,
             secret_env,
+            value_file,
+            unsafe_allow_cli_value,
         } => {
-            let plain = match (secret, secret_env) {
-                (Some(s), _) => s,
-                (None, Some(var)) => std::env::var(&var)
-                    .with_context(|| format!("reading secret from env var '{var}'"))?,
-                (None, None) => bail!("must provide either --secret or --secret-env"),
-            };
-            let secret_buf = wardline_vault::SecretBytes::new(plain.into_bytes());
+            if secret.is_some() && !unsafe_allow_cli_value {
+                bail!(
+                    "passing raw secrets on CLI arguments (--secret) leaks via process listings; use --value-file or --secret-env/--value-env, or explicitly pass --unsafe-allow-cli-value"
+                );
+            }
             let store = VaultStore::open(&state_dir.join("vault"))?;
             let grant = SecretGrant {
                 grant_id: grant_id.clone(),
@@ -884,8 +1267,40 @@ fn handle_vault(cmd: VaultCmd) -> Result<()> {
                 header_name: header,
                 value_prefix,
             };
-            store.store_secret(grant, secret_buf.as_bytes())?;
-            println!("stored DPAPI+ChaCha20Poly1305 vault grant '{grant_id}'");
+            match (value_file, secret, secret_env) {
+                (Some(vf), None, None) => {
+                    store.store_secret_from_file(grant, &vf)?;
+                }
+                (None, Some(s), None) => {
+                    let secret_buf = wardline_vault::SecretBytes::new(s.into_bytes());
+                    store.store_secret(grant, secret_buf.as_bytes())?;
+                }
+                (None, None, Some(var)) => {
+                    let val = std::env::var(&var)
+                        .with_context(|| format!("reading secret from env var '{var}'"))?;
+                    let secret_buf = wardline_vault::SecretBytes::new(val.into_bytes());
+                    store.store_secret(grant, secret_buf.as_bytes())?;
+                }
+                (None, None, None) => {
+                    bail!("must provide --value-file, --secret-env/--value-env, or --secret --unsafe-allow-cli-value")
+                }
+                _ => bail!("specify exactly one of --value-file, --secret-env/--value-env, or --secret"),
+            }
+            println!("stored host-sealed ChaCha20Poly1305 vault grant '{grant_id}'");
+        }
+        VaultCmd::Rotate { state_dir, json } => {
+            let store = VaultStore::open(&state_dir.join("vault"))?;
+            let rotated = store.rotate_master_key()?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "rotated_entries": rotated
+                    }))?
+                );
+            } else {
+                println!("rotated vault master key across {rotated} grant entries");
+            }
         }
         VaultCmd::List { state_dir, json } => {
             let store = VaultStore::open(&state_dir.join("vault"))?;
@@ -907,11 +1322,19 @@ fn handle_vault(cmd: VaultCmd) -> Result<()> {
     Ok(())
 }
 
+fn resolve_approval_store_path(state_dir: &Path, store: Option<PathBuf>) -> PathBuf {
+    store.unwrap_or_else(|| state_dir.join("approvals.redb"))
+}
+
 fn handle_approve(cmd: ApproveCmd) -> Result<()> {
     let now = unix_now_secs();
     match cmd {
-        ApproveCmd::List { state_dir, json } => {
-            let store = ApprovalStore::open(&state_dir.join("approvals.redb"))?;
+        ApproveCmd::List {
+            state_dir,
+            store,
+            json,
+        } => {
+            let store = ApprovalStore::open(&resolve_approval_store_path(&state_dir, store))?;
             let items = store.list_pending(now)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&items)?);
@@ -928,11 +1351,12 @@ fn handle_approve(cmd: ApproveCmd) -> Result<()> {
         }
         ApproveCmd::Grant {
             state_dir,
+            store,
             ticket,
             approver,
             ttl_secs,
         } => {
-            let store = ApprovalStore::open(&state_dir.join("approvals.redb"))?;
+            let store = ApprovalStore::open(&resolve_approval_store_path(&state_dir, store))?;
             let updated = store.approve(ticket, approver, now, ttl_secs)?;
             println!(
                 "approved ticket={} status={:?} digest={}",
@@ -941,17 +1365,56 @@ fn handle_approve(cmd: ApproveCmd) -> Result<()> {
         }
         ApproveCmd::Deny {
             state_dir,
+            store,
             ticket,
             approver,
         } => {
-            let store = ApprovalStore::open(&state_dir.join("approvals.redb"))?;
+            let store = ApprovalStore::open(&resolve_approval_store_path(&state_dir, store))?;
             let updated = store.deny(ticket, approver, now)?;
             println!("denied ticket={} status={:?}", updated.ticket_id, updated.status);
         }
-        ApproveCmd::Sweep { state_dir } => {
-            let store = ApprovalStore::open(&state_dir.join("approvals.redb"))?;
+        ApproveCmd::Sweep { state_dir, store } => {
+            let store = ApprovalStore::open(&resolve_approval_store_path(&state_dir, store))?;
             let count = store.sweep_expired(now)?;
             println!("swept {count} expired approval tickets");
+        }
+        ApproveCmd::Watch {
+            state_dir,
+            store,
+            interval_ms,
+            max_polls,
+            json,
+        } => {
+            let store = ApprovalStore::open(&resolve_approval_store_path(&state_dir, store))?;
+            let mut polls = 0usize;
+            loop {
+                polls += 1;
+                let items = store.list_pending(unix_now_secs())?;
+                if json {
+                    println!("{}", serde_json::to_string(&items)?);
+                } else {
+                    println!(
+                        "[poll #{polls}] {} pending ticket(s)",
+                        items.len()
+                    );
+                    for t in &items {
+                        println!("  {} scope={} reason={}", t.ticket_id, t.scope_key, t.reason);
+                    }
+                }
+                if max_polls.is_some_and(|m| polls >= m) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(interval_ms.max(50)));
+            }
+        }
+        ApproveCmd::Snapshot {
+            state_dir,
+            store,
+            out,
+        } => {
+            let store = ApprovalStore::open(&resolve_approval_store_path(&state_dir, store))?;
+            let count = store.save_snapshot_json(&out)?;
+            println!("saved {count} approval tickets -> {}", out.display());
         }
     }
     Ok(())
@@ -962,29 +1425,64 @@ fn handle_audit(cmd: AuditCmd) -> Result<()> {
         AuditCmd::Verify {
             log,
             seal_pubkey,
+            checkpoint,
+            checkpoint_pubkey,
             json,
         } => {
-            let report = wardline_verify::verify_path_with_hex_key(&log, seal_pubkey.as_deref())?;
+            let report = if let Some(ref cp_path) = checkpoint {
+                let pk = checkpoint_pubkey
+                    .as_deref()
+                    .or(seal_pubkey.as_deref())
+                    .ok_or_else(|| anyhow::anyhow!("--checkpoint requires --checkpoint-pubkey or --seal-pubkey"))?;
+                wardline_verify::verify_checkpoint_file(
+                    &log,
+                    cp_path,
+                    pk,
+                    seal_pubkey.as_deref(),
+                )?
+            } else {
+                wardline_verify::verify_path_with_hex_key(&log, seal_pubkey.as_deref())?
+            };
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 println!(
-                    "VALID: frames={} seals={} head_hash={}",
-                    report.total_frames, report.verified_seals, report.head_hash_hex
+                    "VALID: frames={} seals={} frozen={} head_hash={} merkle_root={}",
+                    report.total_frames,
+                    report.verified_seals,
+                    report.frozen,
+                    report.head_hash_hex,
+                    report.merkle_root_hex
                 );
             }
         }
-        AuditCmd::Checkpoint { log, seal_key } => {
+        AuditCmd::Checkpoint {
+            log,
+            seal_key,
+            out_dir,
+        } => {
             let seed = seal_key
                 .map(|h| decode_hex_32(&h, "seal-key"))
                 .transpose()?;
-            let writer = WalWriter::new(log, seed, 1)?;
+            let writer = WalWriter::new(&log, seed, 1)?;
             let frame = writer.append(unix_now_ms(), AuditEvent::Checkpoint)?;
-            println!(
-                "checkpoint seq={} hash={}",
-                frame.seq,
-                hex::encode(frame.record_hash)
-            );
+            if let Some(sk) = seed {
+                let cp = create_signed_checkpoint(&log, sk, unix_now_ms())?;
+                let cp_path = write_checkpoint_file(&log, &cp, out_dir.as_deref())?;
+                println!(
+                    "checkpoint seq={} hash={} merkle_root={} file={}",
+                    frame.seq,
+                    hex::encode(frame.record_hash),
+                    cp.merkle_root_hex,
+                    cp_path.display()
+                );
+            } else {
+                println!(
+                    "checkpoint seq={} hash={}",
+                    frame.seq,
+                    hex::encode(frame.record_hash)
+                );
+            }
         }
         AuditCmd::Inspect { log, json } => {
             let frames = read_log_frames(&log)?;
@@ -1003,6 +1501,70 @@ fn handle_audit(cmd: AuditCmd) -> Result<()> {
                         hex::encode(f.record_hash)
                     );
                 }
+            }
+        }
+        AuditCmd::Events {
+            log,
+            session_id,
+            action,
+            decision,
+            limit,
+            json,
+        } => {
+            let frames = query_events(
+                &log,
+                &EventFilter {
+                    session_id,
+                    action,
+                    decision,
+                    limit,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&frames)?);
+            } else {
+                for f in frames {
+                    println!("seq={} ts={}ms event={:?}", f.seq, f.timestamp_unix_ms, f.event);
+                }
+            }
+        }
+        AuditCmd::Stats { log, json } => {
+            let stats = compute_stats(&log)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&stats)?);
+            } else {
+                println!(
+                    "Audit Stats path={} frames={} bytes={} frozen={} merkle_root={}",
+                    stats.path, stats.total_frames, stats.file_size_bytes, stats.frozen, stats.merkle_root_hex
+                );
+            }
+        }
+        AuditCmd::Export { log, format, out } => {
+            let fmt = match format.trim().to_ascii_lowercase().as_str() {
+                "json" => ExportFormat::Json,
+                "jsonl" => ExportFormat::Jsonl,
+                "csv" => ExportFormat::Csv,
+                other => bail!("unsupported export format '{other}'; expected json, jsonl, or csv"),
+            };
+            let rendered = export_events(&log, fmt)?;
+            if let Some(p) = out {
+                std::fs::write(&p, &rendered)?;
+                println!("exported audit log -> {}", p.display());
+            } else {
+                print!("{rendered}");
+            }
+        }
+        AuditCmd::Proof { log, index, json } => {
+            let proof = wardline_verify::prove_and_verify_leaf(&log, index)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&proof)?);
+            } else {
+                println!(
+                    "MERKLE PROOF VALID leaf={} tree_size={} steps={}",
+                    proof.leaf_index,
+                    proof.tree_size,
+                    proof.steps.len()
+                );
             }
         }
     }
@@ -1068,21 +1630,29 @@ fn print_guard_response(resp: GuardResponse, json_out: bool) -> Result<()> {
                         reason: reason.clone(),
                     })?
                 );
+            } else {
+                eprintln!(
+                    "approval required: ticket_id={ticket_id} scope={scope_key} digest={action_digest_hex} reason={reason}"
+                );
             }
-            bail!(
-                "approval required: ticket_id={ticket_id} scope={scope_key} digest={action_digest_hex} reason={reason}"
-            )
+            std::process::exit(3);
         }
-        GuardResponse::Denied { reason } => {
+        GuardResponse::Denied { reason, remediation } => {
             if json_out {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&GuardResponse::Denied {
                         reason: reason.clone(),
+                        remediation: remediation.clone(),
                     })?
                 );
+            } else {
+                eprintln!("DENIED: {reason}");
+                if let Some(hint) = remediation {
+                    eprintln!("Remediation: {hint}");
+                }
             }
-            bail!("policy denied: {reason}")
+            std::process::exit(1);
         }
         GuardResponse::Error { code, message } => {
             if json_out {
@@ -1093,10 +1663,404 @@ fn print_guard_response(resp: GuardResponse, json_out: bool) -> Result<()> {
                         message: message.clone(),
                     })?
                 );
+            } else {
+                eprintln!("ERROR ({code}): {message}");
             }
-            bail!("guard error ({code}): {message}")
+            std::process::exit(1);
         }
     }
+}
+
+fn handle_check_net(
+    policy: PathBuf,
+    method: CliMethod,
+    grant: Option<String>,
+    json_out: bool,
+    url: String,
+) -> Result<()> {
+    let raw = std::fs::read_to_string(&policy)?;
+    let compiled = CompiledPolicy::from_toml_str(&raw)?;
+    let net_method: NetMethod = method.into();
+    let explained = evaluate_action_explained(
+        &compiled,
+        &ActionRequest::NetworkRequest {
+            method: net_method,
+            url: url.clone(),
+            grant_id: grant,
+        },
+        None,
+    );
+    let alias = compiled
+        .resolve_destination_alias(&url)
+        .map(|a| a.alias.clone());
+    if json_out {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "url": url,
+                "matched_alias": alias,
+                "explanation": explained,
+            }))?
+        );
+    } else {
+        println!(
+            "decision={:?} rule={} alias={:?}",
+            explained.decision, explained.matched_rule, alias
+        );
+        if let Some(ref hint) = explained.remediation {
+            println!("Remediation: {hint}");
+        }
+    }
+    if matches!(explained.decision, Decision::Deny { .. }) {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn handle_panic(log: PathBuf, reason: String, seal_key: Option<String>, json_out: bool) -> Result<()> {
+    let seed = seal_key
+        .map(|h| decode_hex_32(&h, "seal-key"))
+        .transpose()?;
+    let writer = WalWriter::new(&log, seed, 1)?;
+    let frame = trigger_panic_freeze(&writer, unix_now_ms(), &reason)?;
+    if json_out {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "frozen": true,
+                "seq": frame.seq,
+                "log": log,
+                "tainted_marker": wardline_log::tainted_marker_path(&log),
+                "reason": reason,
+            }))?
+        );
+    } else {
+        println!(
+            "PANIC FREEZE ARMED: seq={} log={} reason={}",
+            frame.seq,
+            log.display(),
+            reason
+        );
+    }
+    Ok(())
+}
+
+fn handle_image(cmd: ImageCmd) -> Result<()> {
+    match cmd {
+        ImageCmd::Sign {
+            dir,
+            arch,
+            kernel,
+            rootfs,
+            snapshot,
+            seed_file,
+            json,
+        } => {
+            let txt = std::fs::read_to_string(&seed_file)?;
+            let seed = decode_hex_32(&txt, "seed-file")?;
+            let manifest = sign_golden_image_dir(
+                &dir,
+                &arch,
+                &kernel,
+                &rootfs,
+                snapshot.as_deref(),
+                unix_now_secs(),
+                seed,
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&manifest)?);
+            } else {
+                println!(
+                    "signed golden image '{}' arch={} kernel_sha256={}",
+                    dir.display(),
+                    manifest.arch,
+                    manifest.kernel_sha256
+                );
+            }
+        }
+        ImageCmd::Verify { dir, pubkey, json } => {
+            let pk = decode_hex_32(&pubkey, "pubkey")?;
+            let manifest = verify_golden_image_dir(&dir, &pk)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&manifest)?);
+            } else {
+                println!(
+                    "VERIFIED golden image '{}' arch={} build_epoch={}",
+                    dir.display(),
+                    manifest.arch,
+                    manifest.build_epoch
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn handle_mcp(
+    action: Option<McpSubcommand>,
+    pipe: String,
+    learn: bool,
+    policy: Option<PathBuf>,
+    learn_out: Option<PathBuf>,
+) -> Result<()> {
+    let run_native_serve = |p: String, lrn: bool, pol: Option<PathBuf>, out: Option<PathBuf>| -> Result<()> {
+        let transport = NamedPipeTransport::new(p);
+        let mut server = if lrn {
+            McpServer::with_learn(transport)
+        } else {
+            McpServer::new(transport)
+        };
+        let stdin = std::io::stdin().lock();
+        let stdout = std::io::stdout().lock();
+        server.run_stdio_loop(stdin, stdout)?;
+        if lrn {
+            let base = match pol {
+                Some(ref pp) => Some(CompiledPolicy::from_toml_str(&std::fs::read_to_string(pp)?)?.manifest),
+                None => None,
+            };
+            if let Some(diff) = server.render_learn_diff_toml(base.as_ref()) {
+                if let Some(op) = out {
+                    std::fs::write(op, diff)?;
+                } else {
+                    eprintln!("{diff}");
+                }
+            }
+        }
+        Ok(())
+    };
+
+    match action {
+        None => run_native_serve(pipe, learn, policy, learn_out),
+        Some(McpSubcommand::Serve {
+            pipe,
+            learn,
+            policy,
+            learn_out,
+        }) => run_native_serve(pipe, learn, policy, learn_out),
+        Some(McpSubcommand::Wrap {
+            name,
+            policy,
+            isolation,
+            working_dir,
+            allow_tool,
+            learn,
+            learn_out,
+            command,
+        }) => {
+            let compiled = CompiledPolicy::from_toml_str(&std::fs::read_to_string(&policy)?)?;
+            let base_manifest = compiled.manifest.clone();
+            let iso: IsolationLevel = isolation.into();
+            let (exe, cmd_args) = command
+                .split_first()
+                .ok_or_else(|| anyhow::anyhow!("missing wrapped command"))?;
+            let cfg = WrapConfig {
+                server_name: name,
+                command: exe.clone(),
+                args: cmd_args.to_vec(),
+                working_dir,
+                isolation: iso,
+                allowed_tools: allow_tool.into_iter().collect::<BTreeSet<_>>(),
+                fail_closed_sandbox: iso != IsolationLevel::Unisolated,
+            };
+            let mut proxy =
+                WrappedMcpProxy::new(cfg, compiled, learn).map_err(|e| anyhow::anyhow!(e))?;
+            let stdin = std::io::stdin().lock();
+            let stdout = std::io::stdout().lock();
+            proxy.run_stdio_proxy(stdin, stdout)?;
+            if let Some(rec) = proxy.learn.as_ref() {
+                let diff = rec.render_toml_diff(Some(&base_manifest));
+                if let Some(op) = learn_out {
+                    std::fs::write(op, diff)?;
+                } else {
+                    eprintln!("{diff}");
+                }
+            }
+            Ok(())
+        }
+        Some(McpSubcommand::Servers { action }) => match action {
+            McpServersAction::Register {
+                name,
+                registry,
+                policy,
+                isolation,
+                allow_tool,
+                command,
+            } => {
+                let mut reg = McpRegistry::load(&registry).map_err(|e| anyhow::anyhow!(e))?;
+                let (exe, cmd_args) = command
+                    .split_first()
+                    .ok_or_else(|| anyhow::anyhow!("missing server command"))?;
+                let entry = McpServerEntry {
+                    name,
+                    command: exe.clone(),
+                    args: cmd_args.to_vec(),
+                    allowed_tools: allow_tool,
+                    policy_path: policy,
+                    sandbox_tier: isolation.into(),
+                    registered_at_unix_secs: unix_now_secs(),
+                };
+                reg.register(entry).map_err(|e| anyhow::anyhow!(e))?;
+                reg.save(&registry).map_err(|e| anyhow::anyhow!(e))?;
+                println!("{}", serde_json::to_string_pretty(&reg)?);
+                Ok(())
+            }
+            McpServersAction::List { registry } => {
+                let reg = McpRegistry::load(&registry).map_err(|e| anyhow::anyhow!(e))?;
+                println!("{}", serde_json::to_string_pretty(&reg)?);
+                Ok(())
+            }
+            McpServersAction::Check {
+                name,
+                registry,
+                policy,
+            } => {
+                let reg = McpRegistry::load(&registry).map_err(|e| anyhow::anyhow!(e))?;
+                let compiled = match policy {
+                    Some(ref p) => Some(CompiledPolicy::from_toml_str(&std::fs::read_to_string(p)?)?),
+                    None => None,
+                };
+                let mut reports = Vec::new();
+                for entry in reg.list() {
+                    if name.as_ref().is_some_and(|n| n != &entry.name) {
+                        continue;
+                    }
+                    reports.push(check_server_entry(entry, compiled.as_ref()));
+                }
+                let ok = reports.iter().all(|r| r.ok);
+                println!("{}", serde_json::to_string_pretty(&reports)?);
+                if !ok {
+                    std::process::exit(1);
+                }
+                Ok(())
+            }
+        },
+    }
+}
+
+fn handle_demo(json_out: bool) -> Result<()> {
+    let demo_dir = std::env::temp_dir().join(format!("wardline_demo_{}", Uuid::new_v4()));
+    let _ = std::fs::remove_dir_all(&demo_dir);
+    std::fs::create_dir_all(&demo_dir)?;
+
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(demo_dir.clone());
+
+    let (arch, abi) = wardline_sandbox::engine_identity();
+    let caps = probe_capabilities().map_err(|rc| anyhow::anyhow!("probe failed rc={rc}"))?;
+
+    let policy = CompiledPolicy::from_toml_str(
+        "version = 1\nname = \"demo\"\n[execution]\nisolation = \"L1\"\ndeny_lolbins = true\ndeny_scripts = true\n[filesystem]\nworkspace_read = [\".\"]\n[network]\negress_mode = \"proxy_only\"\nallowed_destinations = [\"https://api.github.com/**\"]\n",
+    )?;
+
+    let lolbin = evaluate_action_explained(
+        &policy,
+        &ActionRequest::ProcessExec {
+            executable: "powershell.exe".into(),
+            args: vec![],
+        },
+        Some(ExecContext::default()),
+    );
+    let wrapper = evaluate_action_explained(
+        &policy,
+        &ActionRequest::ProcessExec {
+            executable: "env".into(),
+            args: vec!["-S".into(), "id".into()],
+        },
+        Some(ExecContext::default()),
+    );
+    let ssrf = evaluate_action_explained(
+        &policy,
+        &ActionRequest::NetworkRequest {
+            method: NetMethod::Get,
+            url: "http://169.254.169.254/latest/meta-data/".into(),
+            grant_id: None,
+        },
+        None,
+    );
+
+    let root = CertAuthority::generate();
+    let mid = CertAuthority::generate();
+    let leaf = CertAuthority::generate();
+    let now = unix_now_secs();
+    let parent = root.issue_root(
+        "orchestrator",
+        mid.public_key_bytes(),
+        now,
+        now + 300,
+        IsolationLevel::L1,
+        None,
+        3,
+        vec![CapabilityScope::FsRead { root: ".".into() }],
+    )?;
+    let child = mid.delegate(
+        &parent,
+        "worker",
+        leaf.public_key_bytes(),
+        now,
+        now + 120,
+        IsolationLevel::L1,
+        None,
+        vec![CapabilityScope::FsRead { root: ".".into() }],
+    )?;
+    let mut rl = RevocationList::default();
+    rl.add(parent.nodes[0].claim.cert_id);
+    let subtree_blocked = verify_cert_chain_with_revocations(
+        &root.public_key_bytes(),
+        &child,
+        None,
+        Some(&rl),
+        now,
+    )
+    .is_err();
+
+    let log_path = demo_dir.join("demo.wlog");
+    let writer = WalWriter::new(&log_path, None, 1)?;
+    let frame = writer.append(
+        unix_now_ms(),
+        AuditEvent::PolicyDecision {
+            action: "demo".into(),
+            decision: "allow".into(),
+            reason: "demo check".into(),
+        },
+    )?;
+    let frames = read_log_frames(&log_path)?;
+    let tree = MerkleTree::from_frames(&frames);
+    let proof = tree.prove(0).ok_or_else(|| anyhow::anyhow!("missing proof"))?;
+    let merkle_ok = proof.verify_inclusion(&frame.record_hash, &tree.root());
+
+    if json_out {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "distro": arch.distro_tag(),
+                "abi_version": abi,
+                "l1_supported": caps.supports_tier(IsolationLevel::L1),
+                "lolbin_denied": matches!(lolbin.decision, Decision::Deny { .. }),
+                "argv_shield_denied": matches!(wrapper.decision, Decision::Deny { .. }),
+                "ssrf_denied": matches!(ssrf.decision, Decision::Deny { .. }),
+                "cert_subtree_revoked": subtree_blocked,
+                "merkle_inclusion_verified": merkle_ok,
+                "merkle_root_hex": hex::encode(tree.root()),
+            }))?
+        );
+    } else {
+        println!(
+            "Wardline Demo OK distro={} abi={} lolbin_denied={} argv_denied={} ssrf_denied={} cert_subtree_revoked={} merkle_ok={}",
+            arch.distro_tag(),
+            abi,
+            matches!(lolbin.decision, Decision::Deny { .. }),
+            matches!(wrapper.decision, Decision::Deny { .. }),
+            matches!(ssrf.decision, Decision::Deny { .. }),
+            subtree_blocked,
+            merkle_ok
+        );
+    }
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -1112,10 +2076,82 @@ fn main() -> Result<()> {
             root_pubkey,
             cert,
             seal_key,
+            revocation_file,
+            isolation,
+            dry_run,
+            unsafe_no_isolation,
+            learn,
+            learn_out,
             json,
             executable,
             args,
         } => {
+            if let Some(CliIsolation::Unisolated) = isolation {
+                if !unsafe_no_isolation {
+                    bail!("--isolation unisolated is forbidden unless --unsafe-no-isolation is explicitly set");
+                }
+            }
+            let compiled = CompiledPolicy::from_toml_str(&std::fs::read_to_string(&policy)?)?;
+            let baseline_manifest = compiled.manifest.clone();
+
+            if learn {
+                let mut rec = LearnRecorder::default();
+                rec.record_executable(&executable, &args);
+                let diff = rec.render_toml_diff(Some(&baseline_manifest));
+                if let Some(ref out_p) = learn_out {
+                    std::fs::write(out_p, &diff)?;
+                } else {
+                    eprintln!("{diff}");
+                }
+            }
+
+            if dry_run {
+                let resolved = resolve_exec_for_eval(&executable);
+                let binary_info = inspect_binary_file(&resolved).ok();
+                let pe_class = binary_info
+                    .as_ref()
+                    .map(|b| b.to_pe_class())
+                    .unwrap_or(PeClass::NotPe);
+                let explained = evaluate_action_explained(
+                    &compiled,
+                    &ActionRequest::ProcessExec {
+                        executable: resolved.to_string_lossy().into_owned(),
+                        args,
+                    },
+                    Some(ExecContext {
+                        host_os: TargetOs::host(),
+                        host_arch: TargetArch::host(),
+                        pe_class,
+                        binary_info,
+                    }),
+                );
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&explained)?);
+                } else {
+                    println!(
+                        "dry_run decision={:?} rule={} unwrapped={:?}",
+                        explained.decision, explained.matched_rule, explained.unwrapped_executable
+                    );
+                    if let Some(ref h) = explained.remediation {
+                        println!("Remediation: {h}");
+                    }
+                }
+                match explained.decision {
+                    Decision::Allow => return Ok(()),
+                    Decision::RequireApproval { .. } => std::process::exit(3),
+                    Decision::Deny { .. } => std::process::exit(1),
+                }
+            }
+
+            if let Some(cli_iso) = isolation {
+                let iso: IsolationLevel = cli_iso.into();
+                if iso != IsolationLevel::Unisolated {
+                    let caps = probe_capabilities()
+                        .map_err(|rc| anyhow::anyhow!("capability probe failed rc={rc}"))?;
+                    select_backend_for_tier(iso, &caps)?;
+                }
+            }
+
             let cert_chain = load_cert_optional(cert.as_deref())?;
             let req = GuardRequest::RunTool {
                 executable,
@@ -1135,7 +2171,11 @@ fn main() -> Result<()> {
                     root_pubkey_hex: root_pubkey.as_deref(),
                     require_cert: cert.is_some() || root_pubkey.is_some(),
                     seal_key_hex: seal_key.as_deref(),
+                    revocation_file: revocation_file.as_deref(),
                 })?;
+                if let Some(cli_iso) = isolation {
+                    engine.set_isolation_override(cli_iso.into());
+                }
                 engine.handle_request(req)
             };
             print_guard_response(resp, json)?;
@@ -1153,6 +2193,7 @@ fn main() -> Result<()> {
             root_pubkey,
             cert,
             seal_key,
+            revocation_file,
             json,
             url,
         } => {
@@ -1179,16 +2220,31 @@ fn main() -> Result<()> {
                     root_pubkey_hex: root_pubkey.as_deref(),
                     require_cert: cert.is_some() || root_pubkey.is_some(),
                     seal_key_hex: seal_key.as_deref(),
+                    revocation_file: revocation_file.as_deref(),
                 })?;
                 engine.handle_request(req)
             };
             print_guard_response(resp, json)?;
         }
+        Commands::CheckNet {
+            policy,
+            method,
+            grant,
+            json,
+            url,
+        } => handle_check_net(policy, method, grant, json, url)?,
         Commands::Policy(cmd) => handle_policy(cmd)?,
         Commands::Cert(cmd) => handle_cert(cmd)?,
         Commands::Vault(cmd) => handle_vault(cmd)?,
         Commands::Approve(cmd) => handle_approve(cmd)?,
         Commands::Audit(cmd) => handle_audit(cmd)?,
+        Commands::Panic {
+            log,
+            reason,
+            seal_key,
+            json,
+        } => handle_panic(log, reason, seal_key, json)?,
+        Commands::Image(cmd) => handle_image(cmd)?,
         Commands::GuardServe {
             policy,
             pipe,
@@ -1197,7 +2253,43 @@ fn main() -> Result<()> {
             root_pubkey,
             require_cert,
             seal_key,
+            revocation_file,
+            background,
         } => {
+            if background {
+                let exe = std::env::current_exe()?;
+                let mut cmd = Command::new(exe);
+                cmd.arg("guard-serve")
+                    .arg("--policy")
+                    .arg(&policy)
+                    .arg("--pipe")
+                    .arg(&pipe);
+                if let Some(ref b) = base_dir {
+                    cmd.arg("--base-dir").arg(b);
+                }
+                if let Some(ref s) = state_dir {
+                    cmd.arg("--state-dir").arg(s);
+                }
+                if let Some(ref pk) = root_pubkey {
+                    cmd.arg("--root-pubkey").arg(pk);
+                }
+                if require_cert {
+                    cmd.arg("--require-cert");
+                }
+                if let Some(ref sk) = seal_key {
+                    cmd.arg("--seal-key").arg(sk);
+                }
+                if let Some(ref rf) = revocation_file {
+                    cmd.arg("--revocation-file").arg(rf);
+                }
+                let child = cmd
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()?;
+                println!("guard_daemon_pid={}", child.id());
+                return Ok(());
+            }
             let mut engine = init_guard_engine(GuardInitOptions {
                 policy_path: &policy,
                 base_dir: base_dir.as_deref(),
@@ -1205,16 +2297,19 @@ fn main() -> Result<()> {
                 root_pubkey_hex: root_pubkey.as_deref(),
                 require_cert,
                 seal_key_hex: seal_key.as_deref(),
+                revocation_file: revocation_file.as_deref(),
             })?;
             eprintln!("{} serving {}", wardline_guard::guard_banner(), pipe);
             serve_hardened_pipe(&pipe, &mut engine, Arc::new(AtomicBool::new(false)), None, None)?;
         }
-        Commands::Mcp { pipe } => {
-            let mut server = McpServer::new(NamedPipeTransport::new(pipe));
-            let stdin = std::io::stdin().lock();
-            let stdout = std::io::stdout().lock();
-            server.run_stdio_loop(stdin, stdout)?;
-        }
+        Commands::Mcp {
+            action,
+            pipe,
+            learn,
+            policy,
+            learn_out,
+        } => handle_mcp(action, pipe, learn, policy, learn_out)?,
+        Commands::Demo { json } => handle_demo(json)?,
     }
     Ok(())
 }
@@ -1224,7 +2319,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cli_parses_all_core_subcommands_and_scopes() {
+    fn cli_parses_all_core_and_phase2_subcommands() {
         let cli = Cli::try_parse_from([
             "wardline",
             "run",
@@ -1232,6 +2327,10 @@ mod tests {
             "schemas/wardline.v1.toml",
             "--pipe",
             r"\\.\pipe\wardline_guard",
+            "--dry-run",
+            "--isolation",
+            "l1.5",
+            "--learn",
             "--json",
             "C:\\Windows\\System32\\whoami.exe",
         ])
@@ -1240,41 +2339,37 @@ mod tests {
             cli.command,
             Commands::Run {
                 json: true,
+                dry_run: true,
+                learn: true,
                 pipe: Some(_),
                 ..
             }
         ));
 
-        assert!(Cli::try_parse_from([
-            "wardline",
-            "policy",
-            "eval-exec",
-            "--policy",
-            "schemas/wardline.v1.toml",
-            "whoami.exe",
-        ])
-        .is_ok());
-
-        assert!(Cli::try_parse_from([
-            "wardline",
-            "audit",
-            "inspect",
-            "--log",
-            ".wardline/audit.wlog",
-            "--json",
-        ])
-        .is_ok());
-
-        assert!(Cli::try_parse_from([
-            "wardline",
-            "cert",
-            "revoke",
-            "--state-dir",
-            ".wardline",
-            "--cert-id",
-            "00000000-0000-0000-0000-000000000000",
-        ])
-        .is_ok());
+        for argv in [
+            vec!["wardline", "policy", "show", "--policy", "schemas/wardline.v1.toml", "--json"],
+            vec!["wardline", "policy", "eval-exec", "--policy", "schemas/wardline.v1.toml", "whoami.exe"],
+            vec!["wardline", "check-net", "--policy", "schemas/wardline.v1.toml", "https://api.github.com/user"],
+            vec!["wardline", "cert", "inspect", "--cert", "c.json"],
+            vec!["wardline", "cert", "list", "--state-dir", ".wardline"],
+            vec!["wardline", "vault", "rotate", "--state-dir", ".wardline"],
+            vec!["wardline", "vault", "set", "--grant-id", "g", "--host", "api.github.com", "--value-file", "secret.txt"],
+            vec!["wardline", "approve", "watch", "--max-polls", "1", "--json"],
+            vec!["wardline", "audit", "events", "--log", "a.wlog", "--limit", "5"],
+            vec!["wardline", "audit", "stats", "--log", "a.wlog", "--json"],
+            vec!["wardline", "audit", "export", "--log", "a.wlog", "--format", "csv"],
+            vec!["wardline", "audit", "proof", "--log", "a.wlog", "--index", "0"],
+            vec!["wardline", "panic", "--log", "a.wlog", "--reason", "drill"],
+            vec!["wardline", "image", "verify", "--dir", "img", "--pubkey", "00"],
+            vec!["wardline", "mcp", "--pipe", r"\\.\pipe\wardline_guard"],
+            vec!["wardline", "mcp", "servers", "list"],
+            vec!["wardline", "demo", "--json"],
+        ] {
+            assert!(
+                Cli::try_parse_from(argv.clone()).is_ok(),
+                "failed parsing {argv:?}"
+            );
+        }
 
         let scope = parse_scope_spec("net:api.github.com:/repos").unwrap();
         assert_eq!(

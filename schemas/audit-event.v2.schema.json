@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wardline.dev/schemas/audit-event.v2.schema.json",
+  "title": "Wardline Audit Frame v2 Schema",
+  "type": "object",
+  "required": [
+    "seq",
+    "prev_hash",
+    "timestamp_unix_ms",
+    "arch",
+    "event",
+    "record_hash"
+  ],
+  "properties": {
+    "seq": { "type": "integer", "minimum": 0 },
+    "prev_hash": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+      "minItems": 32,
+      "maxItems": 32
+    },
+    "timestamp_unix_ms": { "type": "integer", "minimum": 0 },
+    "arch": { "type": "string", "enum": ["x64", "arm64"] },
+    "record_hash": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+      "minItems": 32,
+      "maxItems": 32
+    },
+    "seal_signature": {
+      "type": ["array", "null"],
+      "items": { "type": "integer", "minimum": 0, "maximum": 255 }
+    },
+    "event": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "session_id", "policy_name", "distro"],
+          "properties": {
+            "type": { "const": "session_started" },
+            "session_id": { "type": "string" },
+            "policy_name": { "type": "string" },
+            "distro": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "action_id", "session_id", "action", "argv_digest_hex", "isolation"],
+          "properties": {
+            "type": { "const": "action_intent" },
+            "action_id": { "type": "string" },
+            "session_id": { "type": "string" },
+            "action": { "type": "string" },
+            "argv_digest_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "isolation": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "action_id", "session_id", "action", "decision", "reason"],
+          "properties": {
+            "type": { "const": "action_outcome" },
+            "action_id": { "type": "string" },
+            "session_id": { "type": "string" },
+            "action": { "type": "string" },
+            "decision": { "type": "string" },
+            "reason": { "type": "string" },
+            "exit_code": { "type": ["integer", "null"] }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "action", "decision", "reason"],
+          "properties": {
+            "type": { "const": "policy_decision" },
+            "action": { "type": "string" },
+            "decision": { "type": "string" },
+            "reason": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "pid", "isolation", "executable", "emulation_prism", "acg_applied"],
+          "properties": {
+            "type": { "const": "sandbox_spawned" },
+            "pid": { "type": "integer" },
+            "isolation": { "type": "string" },
+            "executable": { "type": "string" },
+            "emulation_prism": { "type": "boolean" },
+            "acg_applied": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "pid", "exit_code", "timed_out", "oom_killed", "peak_memory_bytes"],
+          "properties": {
+            "type": { "const": "sandbox_exited" },
+            "pid": { "type": "integer" },
+            "exit_code": { "type": "integer" },
+            "timed_out": { "type": "boolean" },
+            "oom_killed": { "type": "boolean" },
+            "peak_memory_bytes": { "type": "integer" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "method", "destination", "status", "bytes_transferred"],
+          "properties": {
+            "type": { "const": "egress_request" },
+            "method": { "type": "string" },
+            "destination": { "type": "string" },
+            "status": { "type": "integer" },
+            "bytes_transferred": { "type": "integer" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "grant_id", "destination"],
+          "properties": {
+            "type": { "const": "vault_access" },
+            "grant_id": { "type": "string" },
+            "destination": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type"],
+          "properties": { "type": { "const": "checkpoint" } }
+        },
+        {
+          "type": "object",
+          "required": ["type", "reason"],
+          "properties": {
+            "type": { "const": "panic_freeze" },
+            "reason": { "type": "string" }
+          }
+        }
+      ]
+    }
+  }
+}

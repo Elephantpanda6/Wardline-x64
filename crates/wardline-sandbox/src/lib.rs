@@ -1,14 +1,60 @@
+pub mod cgroup;
+pub mod driver;
+pub mod golden_image;
+pub mod l15_gvisor;
+pub mod l2_firecracker;
+pub mod l2_hcs;
+pub mod l2_vz;
+
+pub use cgroup::{is_cgroup_v2_available, CgroupLimits, CgroupScope};
+pub use driver::{select_backend_for_tier, IsolationBackend, NativeEngineBackend, SandboxInitError};
+pub use golden_image::{
+    sha256_file_hex, sign_golden_image_dir, verify_golden_image_dir, GoldenImageManifest,
+};
+pub use l15_gvisor::{build_oci_config_json, find_runsc_binary, GvisorBackend};
+pub use l2_firecracker::{
+    find_firecracker_binary, verify_snapshot_hash, FirecrackerBackend, FirecrackerBootPlan,
+    WarmPool, WarmVmSlot,
+};
+pub use l2_hcs::{build_hcs_uvm_config, HcsBackend};
+pub use l2_vz::{build_vz_vm_spec, VzBackend};
+
 use std::ptr::{null, null_mut};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use wardline_core::{IsolationLevel, TargetArch};
 
+pub const TIER_BIT_L0: u32 = 0x01;
+pub const TIER_BIT_L1: u32 = 0x02;
+pub const TIER_BIT_L1_5: u32 = 0x04;
+pub const TIER_BIT_L2: u32 = 0x08;
+
+pub const FEAT_LANDLOCK: u64 = 1 << 0;
+pub const FEAT_SECCOMP_BPF: u64 = 1 << 1;
+pub const FEAT_USERNS: u64 = 1 << 2;
+pub const FEAT_CGROUP_V2: u64 = 1 << 3;
+pub const FEAT_GVISOR_RUNSC: u64 = 1 << 4;
+pub const FEAT_FIRECRACKER: u64 = 1 << 5;
+pub const FEAT_KVM: u64 = 1 << 6;
+pub const FEAT_WIN_APPCONTAINER: u64 = 1 << 7;
+pub const FEAT_WIN_LOWBOX: u64 = 1 << 8;
+pub const FEAT_WIN_HCS: u64 = 1 << 9;
+pub const FEAT_MACOS_SEATBELT: u64 = 1 << 10;
+pub const FEAT_MACOS_VZ: u64 = 1 << 11;
+pub const FEAT_FREEBSD_CAPSICUM: u64 = 1 << 12;
+pub const FEAT_FREEBSD_BHYVE: u64 = 1 << 13;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostCapabilitiesRaw {
-    pub arch: u32,
+    pub struct_size: u32,
     pub abi_version: u32,
+    pub arch: u32,
+    pub os_build_number: u32,
+    pub page_size: u32,
+    pub tier_support_mask: u32,
+    pub feature_flags: u64,
     pub is_wow64_emulated: u8,
     pub cet_shadow_stack_supported: u8,
     pub pac_bti_available: u8,
@@ -17,8 +63,9 @@ pub struct HostCapabilitiesRaw {
     pub job_object_iocp_supported: u8,
     pub os_kind: u8,
     pub arm64_ext_flags: u8,
-    pub os_build_number: u32,
-    pub page_size: u32,
+    pub landlock_abi: u8,
+    pub cgroup_v2_available: u8,
+    pub reserved: [u8; 6],
 }
 
 impl HostCapabilitiesRaw {
@@ -56,10 +103,22 @@ impl HostCapabilitiesRaw {
     pub const fn has_large_pages(self) -> bool {
         (self.arm64_ext_flags & 0x20) != 0
     }
+
+    pub const fn supports_tier(self, tier: IsolationLevel) -> bool {
+        match tier {
+            IsolationLevel::Unisolated => false,
+            IsolationLevel::L0 => (self.tier_support_mask & TIER_BIT_L0) != 0,
+            IsolationLevel::L1 => (self.tier_support_mask & TIER_BIT_L1) != 0,
+            IsolationLevel::L1_5 => (self.tier_support_mask & TIER_BIT_L1_5) != 0,
+            IsolationLevel::L2 => (self.tier_support_mask & TIER_BIT_L2) != 0,
+        }
+    }
 }
 
 #[repr(C)]
 struct WlSpawnRequest {
+    struct_size: u32,
+    abi_version: u32,
     executable_utf8: *const u8,
     executable_len: usize,
     cmdline_utf8: *const u8,
@@ -84,7 +143,9 @@ struct WlSpawnRequest {
     enable_acg: u8,
     enable_cet: u8,
     capture_output: u8,
-    reserved: [u8; 3],
+    disable_win32k: u8,
+    block_non_ms_binaries: u8,
+    single_process_mode: u8,
 }
 
 #[repr(C)]
@@ -100,6 +161,7 @@ struct WlIoBuffers {
 #[repr(C)]
 #[derive(Default)]
 struct WlSpawnResult {
+    struct_size: u32,
     status_code: u32,
     win32_error: u32,
     exit_code: u32,
@@ -159,10 +221,11 @@ pub enum EngineStatus {
     Probe = 13,
     MemoryLimit = 14,
     Io = 15,
+    IsolationUnavailable = 16,
 }
 
 impl EngineStatus {
-    fn from_u32(v: u32) -> Self {
+    pub fn from_u32(v: u32) -> Self {
         match v {
             0 => Self::Ok,
             1 => Self::InvalidArg,
@@ -179,6 +242,8 @@ impl EngineStatus {
             12 => Self::Acl,
             13 => Self::Probe,
             14 => Self::MemoryLimit,
+            15 => Self::Io,
+            16 => Self::IsolationUnavailable,
             _ => Self::Io,
         }
     }
@@ -212,6 +277,10 @@ pub struct SpawnConfig {
     pub allow_arm64ec: bool,
     pub enable_acg: bool,
     pub enable_cet: bool,
+    pub disable_win32k: bool,
+    pub block_non_ms_binaries: bool,
+    pub single_process_mode: bool,
+    pub allow_unisolated: bool,
     pub max_output_bytes: usize,
 }
 
@@ -234,6 +303,10 @@ impl Default for SpawnConfig {
             allow_arm64ec: false,
             enable_acg: true,
             enable_cet: true,
+            disable_win32k: false,
+            block_non_ms_binaries: false,
+            single_process_mode: false,
+            allow_unisolated: false,
             max_output_bytes: 1024 * 1024,
         }
     }
@@ -258,8 +331,13 @@ pub struct SpawnOutput {
 
 pub fn probe_capabilities() -> Result<HostCapabilitiesRaw, u32> {
     let mut caps = HostCapabilitiesRaw {
+        struct_size: std::mem::size_of::<HostCapabilitiesRaw>() as u32,
+        abi_version: 2,
         arch: 0,
-        abi_version: 0,
+        os_build_number: 0,
+        page_size: 0,
+        tier_support_mask: 0,
+        feature_flags: 0,
         is_wow64_emulated: 0,
         cet_shadow_stack_supported: 0,
         pac_bti_available: 0,
@@ -268,8 +346,9 @@ pub fn probe_capabilities() -> Result<HostCapabilitiesRaw, u32> {
         job_object_iocp_supported: 0,
         os_kind: 0,
         arm64_ext_flags: 0,
-        os_build_number: 0,
-        page_size: 0,
+        landlock_abi: 0,
+        cgroup_v2_available: 0,
+        reserved: [0; 6],
     };
     let status = unsafe { wl_probe_capabilities(&mut caps) };
     if status == 0 {
@@ -376,13 +455,11 @@ pub fn spawn_isolated(cfg: &SpawnConfig) -> SpawnOutput {
 
     let rw_joined = cfg.rw_paths.join("\n");
     let ro_joined = cfg.ro_paths.join("\n");
-    let iso_u32 = match cfg.isolation {
-        IsolationLevel::L0 => 0,
-        IsolationLevel::L1 => 1,
-        IsolationLevel::L2 => 2,
-    };
+    let iso_u32 = cfg.isolation.abi_code();
 
     let req = WlSpawnRequest {
+        struct_size: std::mem::size_of::<WlSpawnRequest>() as u32,
+        abi_version: 2,
         executable_utf8: slice_ptr(cfg.executable.as_bytes()),
         executable_len: cfg.executable.len(),
         cmdline_utf8: slice_ptr(cfg.cmdline.as_bytes()),
@@ -407,7 +484,9 @@ pub fn spawn_isolated(cfg: &SpawnConfig) -> SpawnOutput {
         enable_acg: u8::from(cfg.enable_acg),
         enable_cet: u8::from(cfg.enable_cet),
         capture_output: 1,
-        reserved: [0; 3],
+        disable_win32k: u8::from(cfg.disable_win32k),
+        block_non_ms_binaries: u8::from(cfg.block_non_ms_binaries),
+        single_process_mode: u8::from(cfg.single_process_mode),
     };
 
     let cap = cfg.max_output_bytes.max(4096);
@@ -448,5 +527,17 @@ pub fn spawn_isolated(cfg: &SpawnConfig) -> SpawnOutput {
         stdout: stdout_buf,
         stderr: stderr_buf,
         detail: String::from_utf8_lossy(&detail_buf).into_owned(),
+    }
+}
+
+#[cfg(test)]
+mod abi_v2_tests {
+    use super::*;
+
+    #[test]
+    fn c_abi_v2_struct_sizes_match_zig_contract() {
+        assert_eq!(std::mem::size_of::<HostCapabilitiesRaw>(), 48);
+        assert_eq!(std::mem::size_of::<WlSpawnRequest>(), 152);
+        assert_eq!(std::mem::size_of::<WlSpawnResult>(), 64);
     }
 }

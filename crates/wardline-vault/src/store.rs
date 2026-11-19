@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 use std::time::SystemTime;
 
 use base64::engine::general_purpose::STANDARD as B64;
@@ -12,7 +12,7 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
-use crate::acl::protect_path_owner_only;
+use crate::acl::{protect_path_owner_only, verify_owner_only_file};
 use crate::dpapi::{dpapi_protect, dpapi_unprotect, SecretBytes};
 use crate::VaultError;
 
@@ -44,9 +44,18 @@ type CachedSecrets = (u64, Option<SystemTime>, Vec<(String, SecretBytes)>);
 
 pub struct VaultStore {
     dir: PathBuf,
-    master_key: SecretBytes,
+    master_key: RwLock<SecretBytes>,
     io_lock: Mutex<()>,
     scrub_cache: Mutex<Option<CachedSecrets>>,
+}
+
+impl std::fmt::Debug for VaultStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VaultStore")
+            .field("dir", &self.dir)
+            .field("master_key", &"<REDACTED>")
+            .finish()
+    }
 }
 
 impl VaultStore {
@@ -90,7 +99,7 @@ impl VaultStore {
 
         Ok(Self {
             dir: dir.to_path_buf(),
-            master_key,
+            master_key: RwLock::new(master_key),
             io_lock: Mutex::new(()),
             scrub_cache: Mutex::new(None),
         })
@@ -133,7 +142,11 @@ impl VaultStore {
             return Err(VaultError::Crypto("invalid AEAD nonce length".into()));
         }
 
-        let cipher = ChaCha20Poly1305::new(Key::from_slice(self.master_key.as_bytes()));
+        let mk = self
+            .master_key
+            .read()
+            .map_err(|_| VaultError::Crypto("vault master_key lock poisoned".into()))?;
+        let cipher = ChaCha20Poly1305::new(Key::from_slice(mk.as_bytes()));
         let aad = Self::entry_aad(grant_id);
         let mut pt = cipher
             .decrypt(
@@ -150,7 +163,11 @@ impl VaultStore {
     }
 
     pub fn store_secret(&self, grant: SecretGrant, secret_plain: &[u8]) -> Result<(), VaultError> {
-        let cipher = ChaCha20Poly1305::new(Key::from_slice(self.master_key.as_bytes()));
+        let mk = self
+            .master_key
+            .read()
+            .map_err(|_| VaultError::Crypto("vault master_key lock poisoned".into()))?;
+        let cipher = ChaCha20Poly1305::new(Key::from_slice(mk.as_bytes()));
         let mut nonce_bytes = [0u8; 12];
         OsRng.fill_bytes(&mut nonce_bytes);
         let aad = Self::entry_aad(&grant.grant_id);
@@ -243,6 +260,92 @@ impl VaultStore {
         }
         Ok(result)
     }
+
+    pub fn store_secret_from_file(
+        &self,
+        grant: SecretGrant,
+        secret_file: &Path,
+    ) -> Result<(), VaultError> {
+        verify_owner_only_file(secret_file)?;
+        let mut raw = std::fs::read(secret_file)?;
+        while matches!(raw.last(), Some(b'\n' | b'\r')) {
+            raw.pop();
+        }
+        let res = self.store_secret(grant, &raw);
+        raw.zeroize();
+        res
+    }
+
+    /// Generates a fresh 256-bit master key, seals it under host custody, re-encrypts all vault
+    /// entries atomically with fresh AEAD nonces, and returns the number of rotated entries.
+    pub fn rotate_master_key(&self) -> Result<usize, VaultError> {
+        let _io_guard = self
+            .io_lock
+            .lock()
+            .map_err(|_| VaultError::Crypto("vault io lock poisoned".into()))?;
+        let old_vf = self.load_file()?;
+        let mut decrypted = Vec::with_capacity(old_vf.entries.len());
+        for (grant_id, entry) in &old_vf.entries {
+            decrypted.push(self.decrypt_entry(grant_id, entry)?);
+        }
+
+        let mut raw_new = vec![0u8; 32];
+        OsRng.fill_bytes(&mut raw_new);
+        let new_mk = SecretBytes::new(raw_new);
+        let sealed = dpapi_protect(new_mk.as_bytes(), MASTER_ENTROPY)?;
+        let new_cipher = ChaCha20Poly1305::new(Key::from_slice(new_mk.as_bytes()));
+
+        let mut new_entries = BTreeMap::new();
+        for (grant, secret) in decrypted {
+            let mut nonce_bytes = [0u8; 12];
+            OsRng.fill_bytes(&mut nonce_bytes);
+            let aad = Self::entry_aad(&grant.grant_id);
+            let ct = new_cipher
+                .encrypt(
+                    Nonce::from_slice(&nonce_bytes),
+                    Payload {
+                        msg: secret.as_bytes(),
+                        aad: &aad,
+                    },
+                )
+                .map_err(|e| VaultError::Crypto(e.to_string()))?;
+            let id = grant.grant_id.clone();
+            new_entries.insert(
+                id,
+                EncryptedVaultEntry {
+                    grant,
+                    nonce_b64: B64.encode(nonce_bytes),
+                    ciphertext_b64: B64.encode(ct),
+                },
+            );
+        }
+
+        let count = new_entries.len();
+        let new_vf = VaultFile {
+            version: 1,
+            entries: new_entries,
+        };
+
+        let key_path = self.dir.join("vault.key");
+        let tmp_key = self.dir.join("vault.key.tmp");
+        std::fs::write(&tmp_key, &sealed)?;
+        protect_path_owner_only(&tmp_key)?;
+        std::fs::rename(&tmp_key, &key_path)?;
+        protect_path_owner_only(&key_path)?;
+
+        self.save_file(&new_vf)?;
+        {
+            let mut guard = self
+                .master_key
+                .write()
+                .map_err(|_| VaultError::Crypto("vault master_key lock poisoned".into()))?;
+            *guard = new_mk;
+        }
+        if let Ok(mut cache) = self.scrub_cache.lock() {
+            *cache = None;
+        }
+        Ok(count)
+    }
 }
 
 #[cfg(test)]
@@ -278,6 +381,18 @@ mod tests {
         let (grant, secret) = reopened.unseal_secret("github_ro").unwrap();
         assert_eq!(grant.host_pattern, "api.github.com");
         assert_eq!(secret.as_bytes(), b"ghp_TestSecretXYZ");
+
+        let dbg_vault = format!("{reopened:?}");
+        let dbg_secret = format!("{secret:?}");
+        assert!(!dbg_vault.contains("ghp_TestSecretXYZ"));
+        assert!(dbg_vault.contains("REDACTED"));
+        assert!(!dbg_secret.contains("ghp_TestSecretXYZ"));
+        assert!(dbg_secret.contains("REDACTED"));
+
+        assert_eq!(reopened.rotate_master_key().unwrap(), 1);
+        let reopened2 = VaultStore::open(&dir).unwrap();
+        let (_, secret2) = reopened2.unseal_secret("github_ro").unwrap();
+        assert_eq!(secret2.as_bytes(), b"ghp_TestSecretXYZ");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -1,13 +1,23 @@
 #![forbid(unsafe_code)]
 
+pub mod argv_shield;
 pub mod eval;
+pub mod explain;
 pub mod manifest;
+pub mod sessions;
 
-pub use eval::{evaluate_action, ExecContext};
-pub use manifest::{
-    ApprovalConfig, ArchitectureConfig, AuditConfig, CompiledPolicy, CredentialsConfig,
-    EgressMode, ExecutionConfig, FilesystemConfig, NetworkConfig, PolicyManifest,
+pub use argv_shield::{
+    bin_matches, inspect_argv, method_is_token, normalize_bin_stem, request_target_is_clean,
+    unwrap_command, UnwrappedCommand,
 };
+pub use eval::{evaluate_action, evaluate_action_explained, ExecContext};
+pub use explain::{render_policy_summary, PolicyExplanation};
+pub use manifest::{
+    ApprovalConfig, ApprovalRule, ArchitectureConfig, AuditConfig, CompiledPolicy,
+    CredentialsConfig, DestinationAlias, DestinationRule, EgressMode, ExecutionConfig,
+    FilesystemConfig, NetworkConfig, OperatorForbidConfig, PolicyManifest, WorkspaceMode,
+};
+pub use sessions::{SessionConfig, SessionPhase, SessionPhaseConfig, SessionState};
 
 use thiserror::Error;
 

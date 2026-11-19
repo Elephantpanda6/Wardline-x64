@@ -1,76 +1,82 @@
-# Wardline x64 Verification & Test Matrix
+# Wardline x64 Verification & Test Results
 
-All builds, static analyses, cross-OS Zig engine compilations, unit suites, and live Windows & Linux kernel containment checks recorded below were executed directly against the final tree.
+All tests, lints, release builds, polyglot SDK checks, and benchmarks below reflect runs executed against the finalized codebase (Zero compiler warnings, Zero Clippy warnings, Zero skipped or failed workspace tests on verified targets).
 
-## 1. Environment
+---
 
-- **Windows Native**: Windows 11 x64 (`Build 26300`), `rustc 1.100.0` (`x86_64-pc-windows-msvc`), Zig `0.17.1`
-- **Linux Native (WSL2 Ubuntu)**: `6.18.33.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC x86_64`, `rustc 1.99.1`, `gcc`, `pkg-config`, `libssl-dev` (linking prebuilt Zig `libwardline_engine_x64.a` via `WARDLINE_PREBUILT_ENGINE_DIR`)
+## 1. Windows x64 Native Verification (`win-x64`)
 
-## 2. Zig Multi-OS x64 Kernel Engines (`zig build`)
+- **Host Environment**: Windows 11 x64 (`os_build_number = 26300`), 20 logical CPUs (`intel_x64`), `abi = 2`, `tier_support_mask = 15`, `feature_flags = 896`, `l1_mechanism = "Win32 AppContainer + JobObject"`, `l2_hypervisor = "Hyper-V HCS / WHPX"`.
+- **Zig Build & C-ABI Tests** (`zig build all-engines`, `zig build common-tests`, `zig build test`): **Exited 0**.
+  - Emitted 4 static engine archives:
+    - `zig-out/win-x64/wardline_engine_x64.lib` (`4,962,146` bytes)
+    - `zig-out/linux-x64/libwardline_engine_x64.a` (`10,016,930` bytes)
+    - `zig-out/macos-x64/libwardline_engine_x64.a` (`3,217,208` bytes)
+    - `zig-out/freebsd-x64/libwardline_engine_x64.a` (`4,128,802` bytes)
+- **Rust Clippy**: `cargo clippy --workspace --all-targets -- -D warnings` — **Passed (0 warnings)**.
+- **Rust Workspace Test Suite** (`cargo test --workspace -- --test-threads=1`): **62 unit/integration tests + 8 live kernel sandbox checks passed (0 failed, 0 ignored)**:
+  - `wardline-approval`: `2 passed` (persistence across restart, replay/digest binding, lock release)
+  - `wardline-cert`: `4 passed` (`WardCert` lineage subtree revocation, `MAX_CHAIN_DEPTH`, monotonic attenuation, persistent CRL)
+  - `wardline-cli`: `1 passed` (CLI parser validation across all subcommands and Phase 2 flags)
+  - `wardline-core`: `12 passed` (`PE`, `ELF`, `Mach-O`/`MachOFat`, `Prism` default-deny & opt-in, Windows/Unix LOLBins & scripts, path ADS/UNC/traversal, `HostPlatformProfile`)
+  - `wardline-egress`: `5 passed` (persistent `redb` `BudgetStore`, IMDS/SSRF pre-connect blocking, host grant check, split-chunk secret scrubbing)
+  - `wardline-guard` (unit): `3 passed` (anchored relative read vs CWD hijack, NTFS junction escape block, hardened Named Pipe DACL/roundtrip)
+  - `wardline-guard` (`tests/invariants_i1_i7.rs`): `7 passed` (`I1` secret custody/redaction/rotation, `I2` fail-closed isolation, `I3` 240+ adversarial bypass corpus, `I4` lineage subtree revocation & depth cap, `I5` intent-before-dispatch & Merkle checkpoint & panic freeze, `I6` policy latency & persistent `redb` budgets, `I7` monotonic sessions & single-use approvals & IPC bounds)
+  - `wardline-guest-agent`: `2 passed` (framed JSON protocol roundtrip, secret placeholder without literal custody)
+  - `wardline-log`: `3 passed` (odd-leaf Merkle proof & tamper detection, concurrent writers hash chain, intent/outcome & panic freeze)
+  - `wardline-mcp`: `5 passed` (`McpRegistry`, `LearnRecorder` TOML diff, JSON-RPC 2.0 bounds/notifications, `WrappedMcpProxy`, stdio loop)
+  - `wardline-platform`: `0 tests` (low-level OS FFI wrapper crate; exercised via `vault`, `log`, `guard`, and `invariants_i1_i7`)
+  - `wardline-policy`: `7 passed` (`bin_matches`, bundled flags/`awk`/RFC 9110, 8-depth recursive wrapper unwrap & `env -S` block, ARM64 Prism/LOLBin rules, egress/approval rules, `[operator_forbid]`, fail-closed fs schema)
+  - `wardline-sandbox` (unit): `9 passed` (`C-ABI v2` struct sizes 48B/152B/64B, cgroup scope, fail-closed tier gating, golden image signing/tamper, `gVisor` OCI spec, `Firecracker` zero-NIC/warm pool cleanup, `HCS` spec, `VZ` vsock spec)
+  - `wardline-sandbox` (`tests/live_sandbox.rs` live kernel suite): **8 live checks passed**:
+    1. `[PASS] probe_capabilities os_build=26300`
+    2. `[PASS] L0 RestrictedJob env isolation + handle sanitization`
+    3. `[PASS] L1 AppContainer zero-capability kernel network denial: net_blocked=1 ext_err=10013 lo_kind=TimedOut`
+    4. `[PASS] L1 AppContainer filesystem isolation: fs_isolated=1 denied_err=5`
+    5. `[PASS] JobObject IOCP timeout reaper killed hanging child cleanly`
+    6. `[PASS] JobObject memory cap enforced: oom_killed=true exit=3221225495 peak=25366528 bytes`
+    7. `[PASS] FILE_FLAG_FIRST_PIPE_INSTANCE anti-squatting & process DACL hardened`
+    8. `[PASS] L1 AppContainer System32 whoami.exe exit=0 isolated desktop + ACG`
+  - `wardline-vault`: `2 passed` (cross-chunk streaming scrubber, DPAPI master key persistence with protected DACL)
+  - `wardline-verify`: `0 unit tests` (shared verification logic tested via `wardline-log`)
+- **Release Binaries (`cargo build --release --bins`, PE `0x8664`)**:
+  - `wardline.exe`: `4,526,592` bytes (`machine=0x8664`)
+  - `wardline-guard.exe`: `3,304,448` bytes (`machine=0x8664`)
+  - `wardline-mcp.exe`: `1,958,912` bytes (`machine=0x8664`)
+  - `wardline-verify.exe`: `1,001,472` bytes (`machine=0x8664`)
+  - `wardline-guest-agent.exe`: `391,168` bytes (`machine=0x8664`)
+- **Live CLI Smoke Verification**:
+  - `wardline.exe doctor --json`: verified `abi: 2`, `struct_size: 48`, `distro: "win-x64"`, `appcontainer_supported: 1`, `hyperv_hcs_available: 1`.
+  - `wardline.exe demo --json`: verified `l1_supported: true`, `lolbin_denied: true`, `argv_shield_denied: true`, `ssrf_denied: true`, `cert_subtree_revoked: true`, `merkle_inclusion_verified: true`.
+  - `wardline.exe check-net --policy schemas/wardline.v1.toml https://169.254.169.254/latest/meta-data --json`: denied (`exit=1`, matched `network.allowed_destinations` with remediation hint).
+- **Windows Benchmark (`scripts/bench.ps1`)**:
+  - `policy_1000_eval_and_budget_test_ms=810.85`
+  - `cli_doctor_json_ms=369.05`
+  - `cli_demo_json_ms=361.58`
 
-Executed in `Wardline-x64`:
+---
 
-| Command | Result | Output Artifacts & Sizes |
-|---|---|---|
-| `zig build all-engines` | Passed (exit `0`) | `zig-out/win-x64/wardline_engine_x64.lib` (`4,957,328` bytes)<br>`zig-out/linux-x64/libwardline_engine_x64.a` (`10,005,782` bytes)<br>`zig-out/macos-x64/libwardline_engine_x64.a` (`3,212,616` bytes)<br>`zig-out/freebsd-x64/libwardline_engine_x64.a` (`4,124,282` bytes) |
-| `zig build common-tests` | Passed (exit `0`) | Cross-OS binary format & ABI tests (`PE`, `ELF`, `Mach-O`, `MachOFat`) |
-| `zig build test` | Passed (exit `0`) | Runs `common-host-tests` + `win-x64-tests` natively on Windows x64 |
+## 2. WSL2 Ubuntu Linux x64 Verification (`linux-x64`)
 
-## 3. Native Windows 11 x64 Verification (`x86_64-pc-windows-msvc`)
+- **Host Environment**: `6.18.33.2-microsoft-standard-WSL2 x86_64`, `rustc 1.99.1`, linked against compiled `zig-out/linux-x64` engine via `WARDLINE_PREBUILT_ENGINE_DIR`.
+- **Rust Clippy**: `cargo clippy --workspace --all-targets -- -D warnings` — **Passed (0 warnings)**.
+- **Rust Workspace Test Suite** (`cargo test --workspace -- --test-threads=1`): **62 unit/integration tests + 8 live POSIX kernel checks passed (0 failed, 0 ignored)**:
+  - Live POSIX checks confirmed: `probe_capabilities os=linux os_build=61833 page_size=4096 l1_supported=1`, `POSIX L1 kernel network denial net_blocked=1 ext_err=13`, `POSIX L1 fs_isolated=1 denied_err=13`, `/usr/bin/id exit=0`, plus Landlock ABI discovery (`cgroup_v2_available: 1`, `feature_flags: 95`).
+- **Release Binaries (`cargo build --release --bins`)**: 5 native ELF binaries (`wardline`, `wardline-guard`, `wardline-mcp`, `wardline-verify`, `wardline-guest-agent`) built cleanly.
+- **Linux Benchmark (`scripts/bench.sh`)**:
+  - `policy_1000_eval_and_budget_test_ms=466`
+  - `cli_doctor_json_ms=94`
+  - `cli_demo_json_ms=95`
 
-- `cargo clippy --workspace --all-targets -- -D warnings`: **Passed (0 warnings)** across all 12 crates.
-- `cargo test --workspace -- --test-threads=1`: **40 passed, 0 failed, 0 ignored**:
-  - `wardline-core`: `12` passed
-  - `wardline-egress`: `4` passed
-  - `wardline-cert`: `3` passed
-  - `wardline-policy`: `3` passed
-  - `wardline-guard`: `3` passed (incl. live NTFS junction escape block & hardened Named Pipe roundtrip)
-  - `wardline-approval`: `2` passed
-  - `wardline-vault`: `2` passed
-  - `wardline-log`: `1` passed
-  - `wardline-mcp`: `1` passed
-  - `wardline-cli`: `1` passed
-  - `wardline-sandbox` (`tests/live_sandbox.rs`): **8 `[PASS]` live kernel assertions**:
-    1. `probe_capabilities os_build=26300`
-    2. `L0 RestrictedJob env isolation + handle sanitization`
-    3. `L1 AppContainer zero-capability kernel network denial: net_blocked=1 ext_err=10013 lo_kind=TimedOut`
-    4. `L1 AppContainer filesystem isolation: fs_isolated=1 denied_err=5`
-    5. `JobObject IOCP timeout reaper killed hanging child cleanly`
-    6. `JobObject memory cap enforced: oom_killed=true exit=3221225495 peak=25391104 bytes`
-    7. `FILE_FLAG_FIRST_PIPE_INSTANCE anti-squatting & process DACL hardened`
-    8. `L1 AppContainer System32 whoami.exe exit=0 isolated desktop + ACG`
-- `cargo build --release --bins`: **Passed (exit `0`)** with PE `machine=0x8664`:
-  - `wardline.exe` (`3,593,216` bytes)
-  - `wardline-guard.exe` (`2,845,184` bytes)
-  - `wardline-mcp.exe` (`886,784` bytes)
-  - `wardline-verify.exe` (`854,528` bytes)
-- **Live Windows CLI Smoke Tests** (isolated temp dir, cleaned after run):
-  - `wardline.exe doctor --json`: exit `0` (`os="windows"`, `arch="x64"`, `os_build_number=26300`, `page_size=4096`)
-  - `policy validate` on `schemas/wardline.v1.toml` + all 5 `schemas/profiles/*.toml`: all `6` `"valid": true`
-  - `wardline.exe run ... whoami.exe`: `status="Ok"`, `acg_applied=true`, `exit_code=0`, `peak_memory_bytes=2531328`
-  - `wardline.exe run ... cmd.exe /c echo hi`: denied (`"LOLBin 'cmd.exe' blocked by execution policy"`, exit `1`)
-  - `wardline-verify.exe --log audit.wlog --json`: `total_frames=7`, `final_seq=6`, `valid=true`, exit `0`
+---
 
-## 4. Native Linux x64 Verification (WSL2 Ubuntu, `6.18.33.2`)
+## 3. Polyglot Client SDK Checks & Scope Caveats
 
-- `cargo clippy --workspace --all-targets -- -D warnings`: **Passed (0 warnings)**.
-- `cargo test --workspace -- --test-threads=1`: **40 passed, 0 failed, 0 ignored**:
-  - `32` unit tests across workspace crates (incl. POSIX `flock`, `0700/0600` custody, Unix symlink broker block, UDS `SO_PEERCRED` roundtrip)
-  - `8` live POSIX kernel containment assertions (`tests/live_sandbox.rs`):
-    1. `probe_capabilities os=linux os_build=61833 page_size=4096 l1_supported=1`
-    2. `POSIX L0 env isolation + FD sanitization`
-    3. `POSIX L1 kernel network denial: net_blocked=1 ext_err=13 lo_kind=PermissionDenied`
-    4. `POSIX L1 filesystem isolation: fs_isolated=1 denied_err=13`
-    5. `POSIX process-group timeout reaper killed hanging child cleanly`
-    6. `POSIX memory rlimit cap enforced: oom_killed=true exit=134 peak=30396416 bytes`
-    7. `POSIX owner-only modes (0600/0700) & dumpable=0 hardened`
-    8. `POSIX L1 system binary (/usr/bin/id) exit=0`
-- **Live Linux CLI Smoke Tests** (isolated `/tmp` smoke dir, cleaned after run):
-  - `./target/release/wardline doctor --json`: `os="linux"`, `os_kind=2`, `os_build_number=61833`, `l1_mechanism="Linux UserNS + Landlock + Seccomp"`, `l2_available=true`, `l2_hypervisor="Linux KVM"`
-  - `policy validate` on `schemas/wardline.v1.toml` + all 5 `schemas/profiles/*.toml`: all `6` `"valid": true`
-  - `wardline run ... /usr/bin/id`: `status="Ok"`, `detail="completed inside POSIX isolation boundary"`, `exit_code=0`, `cpu_time_us=2719`, `peak_memory_bytes=8298496`
-  - `wardline run ... /bin/echo hello-wardline-linux`: `status="Ok"`, `exit_code=0`, `stdout_utf8_lossy="hello-wardline-linux\n"`
-  - `wardline run ... /bin/sh -c "echo pwned"`: denied (`"LOLBin 'dash' blocked by execution policy"`, exit `1`)
-  - `./target/release/wardline-verify --log audit.wlog --json`: `total_frames=11`, `final_seq=10`, `valid=true`, exit `0`
-- **Not run live in this environment**: `macos-x64` and `freebsd-x64` hosts (cross-compiled via Zig engine targets; macOS covered in `.github/workflows/ci.yml`).
+| SDK / Component | Windows x64 Status | WSL2 Ubuntu Linux x64 Status | Notes |
+|---|---|---|---|
+| **Python SDK** (`clients/python`) | **1/1 passed** (`unittest`) | **1/1 passed** (`unittest`) | Covers IPC `[u32 LE][JSON]` frame roundtrip & `ApprovalRequiredError` / `DeniedError` mapping |
+| **TypeScript SDK** (`clients/ts`) | **1/1 passed** (`node v24.18.1 --experimental-strip-types --test`) | Failed (`ERR_NO_TYPESCRIPT` on `node v22.22.1`) | Node 22.6+ / 24+ required to execute `.ts` directly without compilation |
+| **Rust SDK** (`clients/rust/wardline-client`) | **1/1 passed** (`cargo test`) | **1/1 passed** (`cargo test --offline`) | `#![forbid(unsafe_code)]`; verified IPC framing & typed error handling |
+| **Go SDK** (`clients/go/wardline`) | Not executed locally (`go` not installed) | Not executed locally (`go` not installed) | Verified structurally; run `go test ./...` in environments with Go `1.22+` |
+| **macOS & FreeBSD Runtime** | Cross-compiled Zig `.a` libraries only | Cross-compiled Zig `.a` libraries only | `macos-x64` Seatbelt & `freebsd-x64` Capsicum C engines compiled via `zig build all-engines`; live kernel tests require native Darwin / FreeBSD hosts |
+| **Fuzz Targets** (`fuzz/`) | Compiled/checked structure (`libfuzzer-sys`) | Not run locally (`cargo-fuzz` nightly fuzzer not invoked) | 7 libFuzzer harnesses + seed corpora staged in `fuzz/` |

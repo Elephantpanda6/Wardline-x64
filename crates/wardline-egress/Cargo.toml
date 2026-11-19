@@ -11,6 +11,7 @@ wardline-vault.workspace = true
 zeroize.workspace = true
 httparse.workspace = true
 native-tls.workspace = true
+redb.workspace = true
 url.workspace = true
 serde.workspace = true
 thiserror.workspace = true

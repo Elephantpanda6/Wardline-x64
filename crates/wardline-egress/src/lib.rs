@@ -1,9 +1,13 @@
 #![forbid(unsafe_code)]
 
+pub mod budgets;
 pub mod client;
 pub mod ssrf;
 
-pub use client::{execute_egress_request, EgressRequest, EgressResponse};
+pub use budgets::BudgetStore;
+pub use client::{
+    execute_egress_request, execute_egress_request_with_budgets, EgressRequest, EgressResponse,
+};
 pub use ssrf::{resolve_and_pin_addresses, validate_host_name, validate_ip_addr};
 
 use thiserror::Error;
