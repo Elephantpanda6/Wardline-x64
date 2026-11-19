@@ -1,14 +1,30 @@
 #![forbid(unsafe_code)]
 
+pub mod binary;
 pub mod capability;
 pub mod lolbin;
 pub mod path;
 pub mod pe;
+pub mod platform;
 
+pub use binary::{
+    inspect_binary_bytes, inspect_binary_file, validate_binary_policy, BinaryArch, BinaryFormat,
+    BinaryInfo,
+};
 pub use capability::{ActionRequest, CapabilityScope, Decision, EffectKind, NetMethod};
-pub use lolbin::{classify_executable_name, ExecutableRisk};
-pub use path::{is_lexical_prefix_match, normalize_windows_lexical_path, validate_safe_windows_path};
-pub use pe::{inspect_pe_bytes, inspect_pe_file, validate_architecture_policy, ArchValidation, PeClass, PeInfo};
+pub use lolbin::{classify_executable_for_os, classify_executable_name, ExecutableRisk};
+pub use path::{
+    is_host_prefix_match, is_lexical_prefix_match, normalize_host_lexical_path,
+    normalize_posix_lexical_path, normalize_windows_lexical_path, validate_safe_host_path,
+    validate_safe_posix_path, validate_safe_windows_path,
+};
+pub use pe::{
+    inspect_pe_bytes, inspect_pe_file, validate_architecture_policy, ArchValidation, PeClass,
+    PeInfo,
+};
+pub use platform::{
+    detect_host_platform_profile, DeviceClass, HostPlatformProfile, SiliconFamily, TargetOs,
+};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -33,9 +49,17 @@ impl TargetArch {
     }
 
     pub const fn distro_tag(self) -> &'static str {
-        match self {
-            Self::X64 => "win-x64",
-            Self::Arm64 => "win-arm64",
+        match (TargetOs::host(), self) {
+            (TargetOs::Windows, Self::X64) => "win-x64",
+            (TargetOs::Windows, Self::Arm64) => "win-arm64",
+            (TargetOs::Linux, Self::X64) => "linux-x64",
+            (TargetOs::Linux, Self::Arm64) => "linux-arm64",
+            (TargetOs::MacOs, Self::X64) => "macos-x64",
+            (TargetOs::MacOs, Self::Arm64) => "macos-arm64",
+            (TargetOs::FreeBsd, Self::X64) => "freebsd-x64",
+            (TargetOs::FreeBsd, Self::Arm64) => "freebsd-arm64",
+            (TargetOs::Other, Self::X64) => "unix-x64",
+            (TargetOs::Other, Self::Arm64) => "unix-arm64",
         }
     }
 }
@@ -46,6 +70,7 @@ pub enum ArchExecutionMode {
     #[default]
     StrictNative,
     AllowArm64Ec,
+    #[serde(alias = "allow_emulated_x64", alias = "allow_rosetta_x64")]
     AllowPrismX64,
 }
 
@@ -61,8 +86,8 @@ pub enum IsolationLevel {
 pub enum CoreError {
     #[error("invalid capability expression: {0}")]
     InvalidCapability(String),
-    #[error("path violates Windows namespace safety rule: {0}")]
+    #[error("path violates namespace safety rule: {0}")]
     UnsafeWindowsPath(String),
-    #[error("failed to read PE header: {0}")]
+    #[error("failed to read binary header: {0}")]
     Io(#[from] std::io::Error),
 }

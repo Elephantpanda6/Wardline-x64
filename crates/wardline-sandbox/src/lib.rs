@@ -15,9 +15,47 @@ pub struct HostCapabilitiesRaw {
     pub hyperv_hcs_available: u8,
     pub appcontainer_supported: u8,
     pub job_object_iocp_supported: u8,
-    pub reserved: [u8; 2],
+    pub os_kind: u8,
+    pub arm64_ext_flags: u8,
     pub os_build_number: u32,
     pub page_size: u32,
+}
+
+impl HostCapabilitiesRaw {
+    pub const fn os_name(self) -> &'static str {
+        match self.os_kind {
+            1 => "windows",
+            2 => "linux",
+            3 => "macos",
+            4 => "freebsd",
+            5 => "other_unix",
+            _ => "unknown",
+        }
+    }
+
+    pub const fn has_pac(self) -> bool {
+        (self.arm64_ext_flags & 0x01) != 0
+    }
+
+    pub const fn has_bti(self) -> bool {
+        (self.arm64_ext_flags & 0x02) != 0
+    }
+
+    pub const fn has_mte(self) -> bool {
+        (self.arm64_ext_flags & 0x04) != 0
+    }
+
+    pub const fn has_sve(self) -> bool {
+        (self.arm64_ext_flags & 0x08) != 0
+    }
+
+    pub const fn has_sve2(self) -> bool {
+        (self.arm64_ext_flags & 0x10) != 0
+    }
+
+    pub const fn has_large_pages(self) -> bool {
+        (self.arm64_ext_flags & 0x20) != 0
+    }
 }
 
 #[repr(C)]
@@ -228,7 +266,8 @@ pub fn probe_capabilities() -> Result<HostCapabilitiesRaw, u32> {
         hyperv_hcs_available: 0,
         appcontainer_supported: 0,
         job_object_iocp_supported: 0,
-        reserved: [0; 2],
+        os_kind: 0,
+        arm64_ext_flags: 0,
         os_build_number: 0,
         page_size: 0,
     };

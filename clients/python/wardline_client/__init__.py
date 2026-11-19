@@ -2,15 +2,20 @@ from __future__ import annotations
 
 import errno
 import json
+import os
+import socket
 import struct
 import subprocess
 import time
 from dataclasses import dataclass
 from typing import Any
 
-DEFAULT_PIPE_NAME = r"\\.\pipe\wardline_guard"
+DEFAULT_PIPE_NAME = (
+    r"\\.\pipe\wardline_guard" if os.name == "nt" else "/tmp/wardline_guard.sock"
+)
 MAX_IPC_FRAME_BYTES = 16 * 1024 * 1024
 ERROR_PIPE_BUSY = 231
+
 
 def _run_json_cli(cmd: list[str]) -> dict[str, Any]:
     try:
@@ -23,6 +28,7 @@ def _run_json_cli(cmd: list[str]) -> dict[str, Any]:
             except json.JSONDecodeError:
                 pass
         raise
+
 
 @dataclass(frozen=True)
 class WardlineClient:
@@ -63,6 +69,17 @@ class WardlineClient:
             raise ValueError(f"IPC request exceeds max {MAX_IPC_FRAME_BYTES} bytes")
         frame = struct.pack("<I", len(body)) + body
 
+        if os.name != "nt" and not self.pipe_name.startswith(r"\\"):
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.connect(self.pipe_name)
+                sock.sendall(frame)
+                hdr = _recv_exact_socket(sock, 4)
+                resp_len = struct.unpack("<I", hdr)[0]
+                if resp_len == 0 or resp_len > MAX_IPC_FRAME_BYTES:
+                    raise ValueError(f"invalid IPC response length {resp_len}")
+                resp_bytes = _recv_exact_socket(sock, resp_len)
+                return json.loads(resp_bytes.decode("utf-8"))
+
         def _read_exact(pipe: Any, n: int) -> bytes:
             chunks = bytearray()
             while len(chunks) < n:
@@ -99,3 +116,13 @@ class WardlineClient:
                 raise ValueError(f"invalid IPC response length {resp_len}")
             resp_bytes = _read_exact(pipe, resp_len)
         return json.loads(resp_bytes.decode("utf-8"))
+
+
+def _recv_exact_socket(sock: socket.socket, n: int) -> bytes:
+    chunks = bytearray()
+    while len(chunks) < n:
+        chunk = sock.recv(n - len(chunks))
+        if not chunk:
+            raise EOFError("short read on Wardline Unix socket frame")
+        chunks.extend(chunk)
+    return bytes(chunks)

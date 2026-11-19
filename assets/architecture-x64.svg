@@ -15,14 +15,14 @@
   <rect x="0" y="0" width="3600" height="2400" fill="url(#grid)" opacity="0.45"/>
   <rect x="14" y="14" width="3572" height="2372" rx="18" fill="none" stroke="#0F172A" stroke-width="4"/>
   <rect x="28" y="28" width="3544" height="126" rx="14" fill="#0F172A" stroke="#1E293B" stroke-width="2"/>
-  <text x="58" y="82" font-size="34" font-weight="800" fill="#FFFFFF" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif" letter-spacing="0.5px">WARDLINE  //  WINDOWS x64 ZERO-TRUST SYSTEM ARCHITECTURE</text>
-  <text x="60" y="120" font-size="19" font-weight="500" fill="#94A3B8" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Kernel-Contained Tool Execution, Brokered Host Filesystem, DPAPI Secret Vault &amp; SSRF-Pinned HTTPS Egress</text>
+  <text x="58" y="82" font-size="34" font-weight="800" fill="#FFFFFF" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif" letter-spacing="0.5px">WARDLINE  //  x64 MULTI-OS ZERO-TRUST SYSTEM ARCHITECTURE</text>
+  <text x="60" y="120" font-size="19" font-weight="500" fill="#94A3B8" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Multi-OS Kernel Containment (Windows / Linux / macOS / FreeBSD), Brokered Workspace, Locked Vault &amp; SSRF-Pinned Egress</text>
   <rect x="2120" y="44" width="335" height="94" rx="10" fill="#1E293B" stroke="#38BDF8" stroke-width="1.8"/>
-  <text x="2138" y="74" font-size="13" font-weight="700" fill="#38BDF8" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">RUST TARGET</text>
-  <text x="2138" y="110" font-size="17" font-weight="700" fill="#F8FAFC" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">x86_64-pc-windows-msvc</text>
+  <text x="2138" y="74" font-size="13" font-weight="700" fill="#38BDF8" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">RUST TARGETS</text>
+  <text x="2138" y="110" font-size="17" font-weight="700" fill="#F8FAFC" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">x86_64-{win,linux,mac,bsd}</text>
   <rect x="2473" y="44" width="335" height="94" rx="10" fill="#1E293B" stroke="#38BDF8" stroke-width="1.8"/>
-  <text x="2491" y="74" font-size="13" font-weight="700" fill="#38BDF8" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">PE MACHINE GATE</text>
-  <text x="2491" y="110" font-size="17" font-weight="700" fill="#F8FAFC" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">0x8664 (AMD64 Strict)</text>
+  <text x="2491" y="74" font-size="13" font-weight="700" fill="#38BDF8" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">BINARY PREFLIGHT</text>
+  <text x="2491" y="110" font-size="17" font-weight="700" fill="#F8FAFC" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">PE / ELF / Mach-O (CET Strict)</text>
   <rect x="2826" y="44" width="335" height="94" rx="10" fill="#1E293B" stroke="#38BDF8" stroke-width="1.8"/>
   <text x="2844" y="74" font-size="13" font-weight="700" fill="#38BDF8" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">ZIG KERNEL LIB</text>
   <text x="2844" y="110" font-size="17" font-weight="700" fill="#F8FAFC" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">wardline_engine_x64</text>
@@ -45,7 +45,7 @@
   <text x="94" y="383" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Thin SDKs (Zero local crypto or host privileges)</text>
   <text x="94" y="410" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  Python: clients/python/wardline_client (WardlineClient)</text>
   <text x="94" y="437" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  TypeScript: clients/ts/src/index.ts (WardlineClient)</text>
-  <text x="94" y="464" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Operator &amp; Admin CLI:  wardline.exe</text>
+  <text x="94" y="464" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Operator &amp; Admin CLI:  wardline (.exe)</text>
   <text x="94" y="491" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  run | fetch | doctor | policy | cert | vault | approve | audit</text>
   <rect x="74" y="548" width="718" height="320" rx="10" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="2"/>
   <rect x="74" y="548" width="8" height="320" rx="4" fill="#2563EB" stroke="none" stroke-width="2"/>
@@ -53,7 +53,7 @@
   <rect x="623.0" y="559" width="155.0" height="28" rx="14" fill="#047857" stroke="none" stroke-width="2"/>
   <text x="700.5" y="578" font-size="12.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">forbid(unsafe)</text>
   <line x1="90" y1="594" x2="776" y2="594" stroke="#E2E8F0" stroke-width="1.5"/>
-  <text x="94" y="621" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">wardline-mcp.exe  (#![forbid(unsafe_code)], stateless adapter)</text>
+  <text x="94" y="621" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">wardline-mcp  (#![forbid(unsafe_code)], stateless adapter)</text>
   <text x="94" y="648" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Exposes 5 schema-validated MCP tools over stdio JSON-RPC:</text>
   <text x="94" y="675" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  1. wardline_exec       -&gt; GuardRequest::RunTool</text>
   <text x="94" y="702" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  2. wardline_fetch      -&gt; GuardRequest::HttpFetch</text>
@@ -64,18 +64,18 @@
   <text x="94" y="837" font-size="14.5" font-weight="700" fill="#047857" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Invariant: Zero vault keys, sockets, or child handles.</text>
   <rect x="74" y="910" width="718" height="304" rx="10" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="2"/>
   <rect x="74" y="910" width="8" height="304" rx="4" fill="#2563EB" stroke="none" stroke-width="2"/>
-  <text x="94" y="941" font-size="18" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">1C. Hardened Win32 Named Pipe IPC Boundary</text>
+  <text x="94" y="941" font-size="18" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">1C. Hardened Cross-OS IPC Boundary (Pipe / UDS)</text>
   <rect x="642.0" y="921" width="136.0" height="28" rx="14" fill="#0F172A" stroke="none" stroke-width="2"/>
   <text x="710.0" y="940" font-size="12.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">IPC BOUNDARY</text>
   <line x1="90" y1="956" x2="776" y2="956" stroke="#E2E8F0" stroke-width="1.5"/>
-  <text x="94" y="983" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Endpoint: \\.\pipe\wardline_guard  (DEFAULT_PIPE_NAME)</text>
+  <text x="94" y="983" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Win: \\.\pipe\wardline_guard | Unix: wardline_guard.sock</text>
   <text x="94" y="1010" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Framing:  [u32 LE byte_len &lt;= 16 MiB][UTF-8 JSON Frame]</text>
-  <text x="94" y="1037" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Kernel Pipe Security Flags (createHardenedPipeImpl):</text>
-  <text x="94" y="1064" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  FILE_FLAG_FIRST_PIPE_INSTANCE | FILE_FLAG_OVERLAPPED</text>
-  <text x="94" y="1091" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  PIPE_TYPE_MESSAGE | PIPE_REJECT_REMOTE_CLIENTS</text>
-  <text x="94" y="1118" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  SDDL: D:P(A;OICI;GA;;;{UserSID})(A;OICI;GA;;;SY)</text>
-  <text x="94" y="1145" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Process Hardening (hardenCurrentProcessDaclImpl):</text>
-  <text x="94" y="1172" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  SetSecurityInfo(..., PROTECTED_DACL_SECURITY_INFORMATION)</text>
+  <text x="94" y="1037" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Transport Hardening (Win32 Named Pipe / POSIX UDS):</text>
+  <text x="94" y="1064" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  FIRST_PIPE_INSTANCE | OVERLAPPED | Unix 0600 bind</text>
+  <text x="94" y="1091" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  PIPE_TYPE_BYTE | REJECT_REMOTE | SO_PEERCRED UID gate</text>
+  <text x="94" y="1118" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  Win SDDL: D:P(A;OICI;GA;;;{UserSID})(A;OICI;GA;;;SY)</text>
+  <text x="94" y="1145" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Process Hardening (Protected DACL / Non-Dumpable):</text>
+  <text x="94" y="1172" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  Win: PROTECTED_DACL_SECURITY_INFO | Linux: PR_SET_DUMPABLE=0</text>
   <polyline points="433,506 433,548" fill="none" stroke="#2563EB" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
   <rect x="349.9" y="511" width="166.2" height="24" rx="6" fill="#FFFFFF" stroke="#2563EB" stroke-width="1.6"/>
   <text x="433" y="528" font-size="12.5" font-weight="700" fill="#2563EB" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">stdio / SDK calls</text>
@@ -97,8 +97,8 @@
   <text x="94" y="1455" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">   Policy denies exec, FS, egress &amp; secrets unless explicitly granted.</text>
   <text x="94" y="1481" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">2. Non-Bypassable Secret Custody:</text>
   <text x="94" y="1507" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">   Vault secrets stay inside guard RAM; scrubbed on every exit.</text>
-  <text x="94" y="1533" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">3. Anti-LOLBin &amp; Anti-Junction Enforcement:</text>
-  <text x="94" y="1559" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">   17 LOLBins + 14 script exts blocked; reparse points rejected.</text>
+  <text x="94" y="1533" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">3. Anti-LOLBin &amp; Anti-Junction/Symlink Enforcement:</text>
+  <text x="94" y="1559" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">   25 Win + 34 Unix LOLBins &amp; 19+14 exts blocked; no symlinks/reparse.</text>
   <text x="94" y="1585" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">4. DNS-Rebinding &amp; SSRF Immunity:</text>
   <text x="94" y="1611" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">   Single pinned DNS lookup; loopback/IMDS/RFC1918/IPv6 dropped.</text>
   <text x="94" y="1637" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">5. Single-Use Digest-Bound HITL Approvals:</text>
@@ -133,12 +133,12 @@
   <line x1="1530" y1="302" x2="2050" y2="302" stroke="#E2E8F0" stroke-width="1.5"/>
   <text x="1534" y="329" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">wardline-policy::evaluate_action()</text>
   <text x="1534" y="356" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Validates manifest schema v1 TOML rules</text>
-  <text x="1534" y="383" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">lolbin.rs — 17 LOLBins Blocked:</text>
-  <text x="1534" y="410" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">  cmd, powershell, pwsh, wscript, mshta,</text>
-  <text x="1534" y="437" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">  rundll32, regsvr32, certutil, bitsadmin,</text>
-  <text x="1534" y="464" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">  wmic, msiexec, installutil, msbuild, wsl</text>
-  <text x="1534" y="491" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">14 Script Exts Blocked (.bat .ps1 .vbs .hta)</text>
-  <text x="1534" y="518" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">path.rs: rejects \\?\ \\.\ \??\ UNC\\ ADS :</text>
+  <text x="1534" y="383" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">lolbin.rs — 25 Win + 34 Unix LOLBins Blocked:</text>
+  <text x="1534" y="410" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">  cmd, powershell, pwsh, bash, sh, zsh, curl,</text>
+  <text x="1534" y="437" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">  wget, python, nc, rundll32, regsvr32,</text>
+  <text x="1534" y="464" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">  certutil, wmic, mshta, wsl, socat, osascript</text>
+  <text x="1534" y="491" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">19 Win + 14 Unix Script Exts Blocked (.bat .ps1 .sh)</text>
+  <text x="1534" y="518" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">path.rs: rejects \\?\ \\.\ \??\ ADS : &amp; .. traversal</text>
   <text x="1534" y="545" font-size="14.5" font-weight="700" fill="#047857" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Deterministic ALLOW | NEED_APPROVAL | DENY</text>
   <rect x="2104" y="256" width="512" height="328" rx="10" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="2"/>
   <rect x="2104" y="256" width="8" height="328" rx="4" fill="#6D28D9" stroke="none" stroke-width="2"/>
@@ -166,41 +166,41 @@
   <text x="970" y="711" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">daemon.rs::handle_run_tool()</text>
   <text x="970" y="738" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">build_child_env(): env_clear() + allowlist</text>
   <text x="970" y="765" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Strips inherited host tokens &amp; env vars</text>
-  <text x="970" y="792" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">pe.rs::validate_architecture_policy():</text>
-  <text x="970" y="819" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  Strict 0x8664 (blocks 0x014C x86)</text>
-  <text x="970" y="846" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  COFF Machine preflight before CreateProcess</text>
+  <text x="970" y="792" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">binary.rs::validate_binary_policy():</text>
+  <text x="970" y="819" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  PE (0xAA64/A641/8664), ELF64 (BTI/PAC/CET), Mach-O</text>
+  <text x="970" y="846" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  platform.rs: Laptop | Server | EdgeSBC | Workstation</text>
   <text x="970" y="873" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Vault secrets injected ONLY into granted child</text>
   <text x="970" y="900" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Calls C-ABI v1 FFI -&gt; wl_spawn_isolated()</text>
-  <text x="970" y="927" font-size="14.5" font-weight="700" fill="#047857" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Routes DOWN to Zone 4 Zig Kernel Engine</text>
+  <text x="970" y="927" font-size="14.5" font-weight="700" fill="#047857" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Routes DOWN to Zone 4 OS Zig Kernel Engine</text>
   <rect x="1514" y="638" width="552" height="362" rx="10" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="2"/>
   <rect x="1514" y="638" width="8" height="362" rx="4" fill="#6D28D9" stroke="none" stroke-width="2"/>
-  <text x="1534" y="669" font-size="18" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">4B. Reparse-Safe NTFS File Broker</text>
+  <text x="1534" y="669" font-size="18" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">4B. Reparse/Symlink-Safe File Broker</text>
   <rect x="1925.5" y="649" width="126.5" height="28" rx="14" fill="#5B21B6" stroke="none" stroke-width="2"/>
-  <text x="1988.75" y="668" font-size="12.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">NTFS BROKER</text>
+  <text x="1988.75" y="668" font-size="12.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">FS BROKER</text>
   <line x1="1530" y1="684" x2="2050" y2="684" stroke="#E2E8F0" stroke-width="1.5"/>
   <text x="1534" y="711" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">file_broker.rs (Host FS Gateway, 16 MiB cap)</text>
   <text x="1534" y="738" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">BrokerFileRead / BrokerFileWrite</text>
-  <text x="1534" y="765" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">verify_no_reparse_from_root():</text>
-  <text x="1534" y="792" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">  Walks EVERY segment from base_dir root</text>
-  <text x="1534" y="819" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  FILE_FLAG_OPEN_REPARSE_POINT | BACKUP_SEM</text>
-  <text x="1534" y="846" font-size="14.5" font-weight="700" fill="#DC2626" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  Blocks FILE_ATTRIBUTE_REPARSE_POINT</text>
-  <text x="1534" y="873" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">GetFinalPathNameByHandleW(VOLUME_NAME_DOS):</text>
+  <text x="1534" y="765" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">verify_no_reparse_or_symlink_from_root():</text>
+  <text x="1534" y="792" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">  Walks EVERY segment from base_dir (Win + Unix)</text>
+  <text x="1534" y="819" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  Win: OPEN_REPARSE_POINT | Unix: O_NOFOLLOW</text>
+  <text x="1534" y="846" font-size="14.5" font-weight="700" fill="#DC2626" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  Blocks REPARSE_POINT, junctions &amp; symlinks</text>
+  <text x="1534" y="873" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">GetFinalPathNameByHandleW / canonicalize():</text>
   <text x="1534" y="900" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">  Verifies canonical path stays inside base_dir</text>
   <text x="1534" y="927" font-size="14.5" font-weight="700" fill="#047857" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Writes require consumed BLAKE3 ticket digest</text>
   <rect x="2104" y="638" width="512" height="362" rx="10" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="2"/>
   <rect x="2104" y="638" width="8" height="362" rx="4" fill="#059669" stroke="none" stroke-width="2"/>
-  <text x="2124" y="669" font-size="18" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">4C. DPAPI Vault &amp; Locked Memory</text>
+  <text x="2124" y="669" font-size="18" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">4C. Protected Vault &amp; Locked Memory</text>
   <rect x="2466.0" y="649" width="136.0" height="28" rx="14" fill="#047857" stroke="none" stroke-width="2"/>
   <text x="2534.0" y="668" font-size="12.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">CUSTODY CORE</text>
   <line x1="2120" y1="684" x2="2600" y2="684" stroke="#E2E8F0" stroke-width="1.5"/>
   <text x="2124" y="711" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">wardline-vault (VaultStore + SecretBytes)</text>
   <text x="2124" y="738" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Master key: vault/vault.key</text>
-  <text x="2124" y="765" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">  Wrapped by Win32 DPAPI CryptProtectData()</text>
+  <text x="2124" y="765" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">  Win: DPAPI CryptProtect | Unix: 0700/0600 WLV1</text>
   <text x="2124" y="792" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  Entropy: &quot;wardline.vault.master.v1&quot;</text>
   <text x="2124" y="819" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Entries: vault/vault.enc (ChaCha20Poly1305)</text>
   <text x="2124" y="846" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">  AAD: &quot;wardline.vault.entry.v1\0&quot; || grant_id</text>
   <text x="2124" y="873" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">SecretBytes RAM Protection:</text>
-  <text x="2124" y="900" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">  VirtualLock() -&gt; Zeroize on drop -&gt; Unlock</text>
+  <text x="2124" y="900" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">  VirtualLock() / mlock() -&gt; Zeroize on drop</text>
   <text x="2124" y="927" font-size="14.5" font-weight="700" fill="#DC2626" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">NEVER handed verbatim to MCP or AI Client</text>
   <polyline points="1213,584 1213,638" fill="none" stroke="#6D28D9" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-indigo)"/>
   <polyline points="1790,584 1790,638" fill="none" stroke="#6D28D9" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-indigo)"/>
@@ -228,7 +228,7 @@
   <text x="1938" y="1181" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Magic: WLG1  |  [u32 LE len][CBOR AuditFrame]</text>
   <text x="1938" y="1212" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Chain: BLAKE3(&quot;wardline.wlog.v1\0&quot;||prev||frame)</text>
   <text x="1938" y="1243" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Seal : Ed25519 domain &quot;wardline.seal.v1\0&quot;</text>
-  <text x="1938" y="1274" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Win32: LockFileEx(exclusive) + FlushFileBuffers</text>
+  <text x="1938" y="1274" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Locks: Win32 LockFileEx | Unix flock(LOCK_EX) + sync</text>
   <text x="1938" y="1305" font-size="14.5" font-weight="700" fill="#047857" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Commits Allow, Deny, Approval, Egress &amp; Spawn logs.</text>
   <polyline points="1650,1000 1650,1108" fill="none" stroke="#6D28D9" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-indigo)"/>
   <polyline points="1826,1248 1918,1248" fill="none" stroke="#475569" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-slate)"/>
@@ -240,12 +240,12 @@
   <rect x="2336.5" y="1449" width="145.5" height="28" rx="14" fill="#1D4ED8" stroke="none" stroke-width="2"/>
   <text x="2409.25" y="1468" font-size="12.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">STEP 7: REPLY</text>
   <line x1="1032" y1="1484" x2="2480" y2="1484" stroke="#E2E8F0" stroke-width="1.5"/>
-  <text x="1036" y="1511" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">GuardResponse variants serialized cleanly back over \\.\pipe\wardline_guard:</text>
+  <text x="1036" y="1511" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">GuardResponse variants serialized over Named Pipe / Unix Domain Socket:</text>
   <text x="1036" y="1542" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • GuardResponse::Ok               -&gt; Scrubbed stdout/stderr, HTTP status/body, FS data, exit_code</text>
   <text x="1036" y="1573" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • GuardResponse::ApprovalRequired -&gt; Deterministic ticket_id + BLAKE3 action_digest for HITL</text>
-  <text x="1036" y="1604" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • GuardResponse::Denied           -&gt; Policy rule, LOLBin, reparse/junction, SSRF, or ISA reason</text>
-  <text x="1036" y="1635" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • GuardResponse::Error            -&gt; Typed Win32 / runtime fault code (zero secret leak)</text>
-  <text x="1036" y="1666" font-size="14.5" font-weight="700" fill="#047857" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Cleanup verified on drop: AppContainer profile deleted, transient FS ACEs revoked, SecretBytes zeroized.</text>
+  <text x="1036" y="1604" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • GuardResponse::Denied           -&gt; Policy rule, LOLBin, reparse/symlink, SSRF, or ISA reason</text>
+  <text x="1036" y="1635" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • GuardResponse::Error            -&gt; Typed Win32 / POSIX fault code (zero secret leak)</text>
+  <text x="1036" y="1666" font-size="14.5" font-weight="700" fill="#047857" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Cleanup verified on drop: AppContainer / NetNS torn down, FS ACEs revoked, SecretBytes zeroized.</text>
   <polyline points="1420,1390 1420,1438" fill="none" stroke="#6D28D9" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-indigo)"/>
   <polyline points="792,1020 852,1020 852,380 950,380" fill="none" stroke="#2563EB" stroke-width="4.0" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
   <rect x="829.9" y="644" width="80.19999999999999" height="24" rx="6" fill="#FFFFFF" stroke="#2563EB" stroke-width="1.6"/>
@@ -292,7 +292,7 @@
   <line x1="2804" y1="956" x2="3510" y2="956" stroke="#E2E8F0" stroke-width="1.5"/>
   <text x="2808" y="983" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">client.rs::connect_pinned()  (No re-resolution)</text>
   <text x="2808" y="1011" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Connects directly to validated pinned SocketAddr.</text>
-  <text x="2808" y="1039" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">TLS: native-tls -&gt; Windows Schannel TLS Engine</text>
+  <text x="2808" y="1039" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">TLS: native-tls -&gt; Schannel / OpenSSL / SecTrans</text>
   <text x="2808" y="1067" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Vault Header Inject: Bearer/API key attached ONLY</text>
   <text x="2808" y="1095" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">  inside guard for policy-matched destination host.</text>
   <text x="2808" y="1123" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Response Parse: httparse + capped streaming read</text>
@@ -317,7 +317,7 @@
   <rect x="2788" y="1356" width="8" height="176" rx="4" fill="#475569" stroke="none" stroke-width="2"/>
   <text x="2808" y="1387" font-size="18" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Routing &amp; Control-Flow Signal Legend</text>
   <line x1="2804" y1="1402" x2="3510" y2="1402" stroke="#E2E8F0" stroke-width="1.5"/>
-  <text x="2808" y="1429" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">────►  Blue Solid   : Named Pipe IPC &amp; GuardRequest Flow</text>
+  <text x="2808" y="1429" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">────►  Blue Solid   : Named Pipe / Unix UDS GuardRequest</text>
   <text x="2808" y="1455" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">────►  Indigo Solid : Policy, Cert &amp; Approval Dispatch Flow</text>
   <text x="2808" y="1481" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">─ ─ ►  Teal Dashed  : Pinned Egress &amp; Secret Redact Return</text>
   <text x="2808" y="1507" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">════►  Amber Solid  : C-ABI v1 FFI -&gt; Zig Kernel Sandbox</text>
@@ -327,48 +327,48 @@
   <line x1="2804" y1="1596" x2="3510" y2="1596" stroke="#E2E8F0" stroke-width="1.5"/>
   <text x="2808" y="1623" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Cert Auth : Ed25519 (ed25519-dalek)  &quot;wardline.cert.v1\0&quot;</text>
   <text x="2808" y="1649" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Approvals : BLAKE3 digest lock       &quot;wardline.approval.v1\0&quot;</text>
-  <text x="2808" y="1675" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Vault     : DPAPI + ChaCha20Poly1305 &quot;wardline.vault.entry.v1\0&quot;</text>
+  <text x="2808" y="1675" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Vault     : DPAPI/0600 + ChaCha20Poly1305 &quot;wardline.vault.entry.v1\0&quot;</text>
   <text x="2808" y="1701" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Audit Log : BLAKE3 Chain + Ed25519   &quot;wardline.wlog.v1\0&quot;</text>
   <rect x="48" y="1820" width="2120" height="534" rx="16" fill="#FFFBEB" stroke="#D97706" stroke-width="3.5"/>
   <rect x="48" y="1820" width="2120" height="54" rx="14" fill="#B45309" stroke="#D97706" stroke-width="2"/>
   <rect x="50" y="1854" width="2116" height="22" rx="0" fill="#B45309" stroke="none" stroke-width="2"/>
-  <text x="70" y="1856" font-size="21" font-weight="700" fill="#FFFFFF" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">ZONE 4: WINDOWS x64 ZIG KERNEL CONTAINMENT ENGINE  (engine_x64.zig + sandbox_core.zig)</text>
-  <text x="2148" y="1855" font-size="15" font-weight="600" fill="#E2E8F0" text-anchor="end" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">C-ABI v1 (0x8664 AMD64)</text>
+  <text x="70" y="1856" font-size="21" font-weight="700" fill="#FFFFFF" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">ZONE 4: MULTI-OS x64 ZIG KERNEL CONTAINMENT ENGINES  (C-ABI v1)</text>
+  <text x="2148" y="1855" font-size="15" font-weight="600" fill="#E2E8F0" text-anchor="end" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Win / Linux / macOS / BSD</text>
   <rect x="74" y="1894" width="922" height="436" rx="10" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="2"/>
   <rect x="74" y="1894" width="8" height="436" rx="4" fill="#D97706" stroke="none" stroke-width="2"/>
-  <text x="94" y="1925" font-size="18" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">4A. x64 Preflight &amp; Hardware Mitigation Engine (engine_x64.zig)</text>
-  <rect x="865.0" y="1905" width="117.0" height="28" rx="14" fill="#B45309" stroke="none" stroke-width="2"/>
-  <text x="923.5" y="1924" font-size="12.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">x64 STRICT</text>
+  <text x="94" y="1925" font-size="18" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">4A. x64 Multi-OS Preflight &amp; CET Mitigation Engine</text>
+  <rect x="836.5" y="1905" width="145.5" height="28" rx="14" fill="#B45309" stroke="none" stroke-width="2"/>
+  <text x="909.25" y="1924" font-size="12.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">x64 STRICT</text>
   <line x1="90" y1="1940" x2="980" y2="1940" stroke="#E2E8F0" stroke-width="1.5"/>
-  <text x="94" y="1967" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Build Target: x86_64-windows-msvc  -&gt;  wardline_engine_x64.lib</text>
-  <text x="94" y="1998" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Strict Native PE Machine Verification:</text>
-  <text x="94" y="2029" font-size="14.5" font-weight="700" fill="#047857" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • ALLOW: 0x8664 (IMAGE_FILE_MACHINE_AMD64)</text>
-  <text x="94" y="2060" font-size="14.5" font-weight="700" fill="#DC2626" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • DENY : 0x014C/0xAA64/Non-PE (WL_ERR_PE_DISALLOWED_ARCH)</text>
-  <text x="94" y="2091" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY (word0 &amp; word1):</text>
-  <text x="94" y="2122" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • word0: DEP_ENABLE | SEHOP | FORCE_RELOCATE | HEAP_TERMINATE</text>
-  <text x="94" y="2153" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">           BOTTOM_UP_ASLR | HIGH_ENTROPY_ASLR | EXT_POINT_DISABLE</text>
-  <text x="94" y="2184" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">           FONT_DISABLE  +  PROHIBIT_DYNAMIC_CODE_ALWAYS_ON (ACG)</text>
-  <text x="94" y="2215" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • word1: checkCetShadowStackSupported() != 0  -&gt;</text>
-  <text x="94" y="2246" font-size="14.5" font-weight="700" fill="#047857" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">           MITIGATION2_CET_USER_SHADOW_STACKS_ALWAYS_ON (Intel/AMD CET)</text>
-  <text x="94" y="2277" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Zero JIT emulation relaxation: ACG stays enforced across native x64 binaries.</text>
+  <text x="94" y="1967" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Engines: win-x64 | linux | macos | bsd (.zig)</text>
+  <text x="94" y="1998" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Strict Native Binary Preflight Matrix:</text>
+  <text x="94" y="2029" font-size="14.5" font-weight="700" fill="#047857" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • ALLOW: PE 0x8664 | ELF EM_X86_64 | Mach-O X86_64</text>
+  <text x="94" y="2060" font-size="14.5" font-weight="700" fill="#DC2626" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • DENY : x86 0x014C / ARM64 / Non-Native Images</text>
+  <text x="94" y="2091" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Win32 MITIGATION_POLICY &amp; Hardware CET Probe:</text>
+  <text x="94" y="2122" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • word0: DEP | SEHOP | FORCE_RELOCATE | HEAP_TERMINATE</text>
+  <text x="94" y="2153" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">           ASLR | EXT_DISABLE | FONT_DISABLE | ACG ALWAYS_ON</text>
+  <text x="94" y="2184" font-size="14.5" font-weight="700" fill="#047857" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • word1: CET_USER_SHADOW_STACKS_ALWAYS_ON (Intel/AMD CET)</text>
+  <text x="94" y="2215" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">wl_probe_capabilities(os_kind, CET, KVM/HCS):</text>
+  <text x="94" y="2246" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • Parses Linux CET ELF GNU notes &amp; /proc/cpuinfo shstk</text>
+  <text x="94" y="2277" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • Unified C-ABI v1 across Workstations, Laptops &amp; Servers</text>
   <rect x="1032" y="1894" width="1110" height="436" rx="10" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="2"/>
   <rect x="1032" y="1894" width="8" height="436" rx="4" fill="#D97706" stroke="none" stroke-width="2"/>
-  <text x="1052" y="1925" font-size="18" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">4B. Common Win32 Isolation, Token Drop &amp; IOCP Reaper (sandbox_core.zig)</text>
+  <text x="1052" y="1925" font-size="18" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">4B. Native OS Kernel Containment (Win32 / POSIX Sandbox)</text>
   <rect x="1992.0" y="1905" width="136.0" height="28" rx="14" fill="#0F172A" stroke="none" stroke-width="2"/>
-  <text x="2060.0" y="1924" font-size="12.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">WIN32 KERNEL</text>
+  <text x="2060.0" y="1924" font-size="12.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">KERNEL ABI</text>
   <line x1="1048" y1="1940" x2="2126" y2="1940" stroke="#E2E8F0" stroke-width="1.5"/>
-  <text x="1052" y="1967" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">executeIsolatedChild(WlSpawnRequest*, WlIoBuffers*, WlSpawnResult*)</text>
-  <text x="1052" y="1996" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Isolation Tiers (IsolationLevel):</text>
-  <text x="1052" y="2025" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • L0 (JobAndToken) : CreateRestrictedToken(DISABLE_MAX_PRIVILEGE) + WinLowLabelSid</text>
-  <text x="1052" y="2054" font-size="14.5" font-weight="700" fill="#047857" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • L1 (AppContainer): CreateAppContainerProfile (0 Net Caps) + SECURITY_CAPABILITIES</text>
-  <text x="1052" y="2083" font-size="14.5" font-weight="700" fill="#DC2626" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • L2 (MicroVM)     : Probes computecore.dll (hyperv_hcs_available); Fails Closed today</text>
-  <text x="1052" y="2112" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Suspended Creation &amp; Kernel Guardrails (CreateProcessW + EXTENDED_STARTUPINFO):</text>
-  <text x="1052" y="2141" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • PROC_THREAD_ATTRIBUTE_HANDLE_LIST (ONLY child stdin/stdout/stderr pipe handles)</text>
-  <text x="1052" y="2170" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • lpDesktop = &quot;&quot; (isolated desktop) | CREATE_SUSPENDED | Hardened JobObject</text>
-  <text x="1052" y="2199" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • JobObject: ActiveProcessLimit, Memory Cap, UIRestrictions, KILL_ON_JOB_CLOSE</text>
-  <text x="1052" y="2228" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Deterministic Lifecycle &amp; IOCP Multiplexer:</text>
-  <text x="1052" y="2257" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • ResumeThread -&gt; CreateIoCompletionPort loop drains pipes + enforces timeout_ms</text>
-  <text x="1052" y="2286" font-size="14.5" font-weight="700" fill="#047857" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • defer: TerminateJobObject + Revoke scoped FS ACEs + DeleteAppContainerProfile</text>
+  <text x="1052" y="1967" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">wl_spawn_isolated(WlSpawnRequest*, WlIoBuffers*, WlSpawnResult*)</text>
+  <text x="1052" y="1996" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Per-OS L0/L1 Enforcement Backends:</text>
+  <text x="1052" y="2025" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • Windows : RestrictedToken+LowLabel (L0) | AppContainer+Job (L1)</text>
+  <text x="1052" y="2054" font-size="14.5" font-weight="700" fill="#047857" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • Linux   : PR_SET_NO_NEW_PRIVS | UserNS+NetNS+Landlock+seccomp-BPF</text>
+  <text x="1052" y="2083" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • macOS   : Seatbelt SBPL (default deny + scoped FS + no network)</text>
+  <text x="1052" y="2112" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • FreeBSD : Capsicum cap_enter() capability mode + fexecve()</text>
+  <text x="1052" y="2141" font-size="14.5" font-weight="700" fill="#DC2626" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • L2 Tier : Probes Hyper-V HCS / KVM / Hypervisor (fail-closed today)</text>
+  <text x="1052" y="2170" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Deterministic Child Lifecycle, Limits &amp; I/O Multiplexer:</text>
+  <text x="1052" y="2199" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • Win: CREATE_SUSPENDED + HANDLE_LIST + Job limits + IOCP reaper</text>
+  <text x="1052" y="2228" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • POSIX: FD close + setrlimit(AS/NPROC) + poll() timeout + SIGKILL</text>
+  <text x="1052" y="2257" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • Bounded stdout/stderr capture with fail-closed wall-clock timer</text>
+  <text x="1052" y="2286" font-size="14.5" font-weight="700" fill="#047857" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  • defer: Terminate job/pgroup + Revoke FS ACEs + Delete container</text>
   <polyline points="996,2112 1032,2112" fill="none" stroke="#D97706" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-amber)"/>
   <rect x="2228" y="1820" width="1324" height="534" rx="16" fill="#F1F5F9" stroke="#475569" stroke-width="3.5"/>
   <rect x="2228" y="1820" width="1324" height="54" rx="14" fill="#334155" stroke="#475569" stroke-width="2"/>
@@ -381,15 +381,15 @@
   <rect x="2785.0" y="1905" width="117.0" height="28" rx="14" fill="#334155" stroke="none" stroke-width="2"/>
   <text x="2843.5" y="1924" font-size="12.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">.wardline/</text>
   <line x1="2270" y1="1940" x2="2900" y2="1940" stroke="#E2E8F0" stroke-width="1.5"/>
-  <text x="2274" y="1967" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">vault/vault.key       Win32 DPAPI master blob</text>
+  <text x="2274" y="1967" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">vault/vault.key       Win32 DPAPI / Unix 0600 WLV1</text>
   <text x="2274" y="1999" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">vault/vault.enc       ChaCha20Poly1305 ciphertext</text>
   <text x="2274" y="2031" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">approvals.redb        Digest-bound approval tickets</text>
   <text x="2274" y="2063" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">crl.redb              Revoked capability cert serials</text>
   <text x="2274" y="2095" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">audit.wlog            Append-only WLG1 WAL</text>
   <text x="2274" y="2127" font-size="16.0" font-weight="700" fill="#0F172A" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Host Workspace (--base-dir):</text>
-  <text x="2274" y="2159" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">  Accessed via reparse-safe file_broker.rs or</text>
-  <text x="2274" y="2191" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">  explicitly scoped L1 AppContainer transient ACEs.</text>
-  <text x="2274" y="2223" font-size="14.5" font-weight="700" fill="#DC2626" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  Uncapped child escapes blocked by Win32 ACLs</text>
+  <text x="2274" y="2159" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">  Accessed via symlink/reparse-safe file_broker.rs</text>
+  <text x="2274" y="2191" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">  or explicit L1 AppContainer / Landlock / SBPL scope.</text>
+  <text x="2274" y="2223" font-size="14.5" font-weight="700" fill="#DC2626" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  Uncapped child escapes blocked by kernel ACLs</text>
   <text x="2274" y="2255" font-size="14.5" font-weight="700" fill="#DC2626" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  + Zero ambient credentials on disk/env.</text>
   <rect x="2946" y="1894" width="580" height="436" rx="10" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="2"/>
   <rect x="2946" y="1894" width="8" height="436" rx="4" fill="#6D28D9" stroke="none" stroke-width="2"/>
@@ -397,7 +397,7 @@
   <rect x="3385.5" y="1905" width="126.5" height="28" rx="14" fill="#5B21B6" stroke="none" stroke-width="2"/>
   <text x="3448.75" y="1924" font-size="12.5" font-weight="700" fill="#FFFFFF" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">INDEPENDENT</text>
   <line x1="2962" y1="1940" x2="3510" y2="1940" stroke="#E2E8F0" stroke-width="1.5"/>
-  <text x="2966" y="1967" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">wardline-verify.exe</text>
+  <text x="2966" y="1967" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">wardline-verify (.exe)</text>
   <text x="2966" y="1999" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  --log .wardline/audit.wlog</text>
   <text x="2966" y="2031" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">  --seal-pubkey &lt;Ed25519 hex&gt; [--json]</text>
   <text x="2966" y="2063" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Zero trust in running guard daemon:</text>
@@ -406,7 +406,7 @@
   <text x="2966" y="2159" font-size="15.5" font-weight="500" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">  Ed25519 seal signature offline.</text>
   <text x="2966" y="2191" font-size="14.5" font-weight="700" fill="#047857" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Exit 0  : Chain intact (N frames valid)</text>
   <text x="2966" y="2223" font-size="14.5" font-weight="700" fill="#DC2626" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Exit !=0: Bitflip, truncation, or tamper</text>
-  <text x="2966" y="2255" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">wardline.exe doctor --json -&gt; HW/ABI probe</text>
+  <text x="2966" y="2255" font-size="14.5" font-weight="600" fill="#0F172A" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">wardline doctor --json -&gt; OS/HW/ABI probe</text>
   <polyline points="2916,2195 2946,2195" fill="none" stroke="#475569" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,4" marker-end="url(#arrow-slate)"/>
   <polyline points="1020,1000 1020,1030 940,1030 940,1794 535,1794 535,1894" fill="none" stroke="#D97706" stroke-width="4.0" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-amber)"/>
   <rect x="595.3" y="1778" width="269.4" height="24" rx="6" fill="#FFFFFF" stroke="#D97706" stroke-width="1.6"/>
@@ -416,10 +416,10 @@
   <text x="1290" y="1775" font-size="12.5" font-weight="700" fill="#059669" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">WlSpawnResult + Pipe Output</text>
   <polyline points="2558,1390 2558,1894" fill="none" stroke="#475569" stroke-width="3.8" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-slate)"/>
   <rect x="2449.1" y="1768" width="217.79999999999998" height="24" rx="6" fill="#FFFFFF" stroke="#475569" stroke-width="1.6"/>
-  <text x="2558" y="1785" font-size="12.5" font-weight="700" fill="#475569" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">LockFileEx + WLG1 Flush</text>
+  <text x="2558" y="1785" font-size="12.5" font-weight="700" fill="#475569" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">LockFileEx / flock + WLG1</text>
   <polyline points="2616,520 2724,520 2724,1768 2380,1768 2380,1894" fill="none" stroke="#6D28D9" stroke-width="2.8" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6,4" marker-end="url(#arrow-indigo)"/>
   <rect x="2661.6" y="1504" width="88.8" height="24" rx="6" fill="#FFFFFF" stroke="#6D28D9" stroke-width="1.6"/>
   <text x="2706" y="1521" font-size="12.5" font-weight="700" fill="#6D28D9" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">redb Txn</text>
-  <text x="48" y="2378" font-size="15" font-weight="600" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Wardline Security Architecture (Windows x64 / AMD64)  •  MIT OR Apache-2.0  •  Clean-Room Rust + Zig Win32 Containment</text>
-  <text x="3552" y="2378" font-size="15" font-weight="600" fill="#475569" text-anchor="end" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Elephantpanda6/wardline-x64  •  C-ABI v1  •  12 Rust Crates + Zig Sandbox Engine</text>
+  <text x="48" y="2378" font-size="15" font-weight="600" fill="#475569" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Wardline Security Architecture (x64 / AMD64 Multi-OS)  •  MIT OR Apache-2.0  •  Clean-Room Rust + Zig Kernel Containment</text>
+  <text x="3552" y="2378" font-size="15" font-weight="600" fill="#475569" text-anchor="end" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Elephantpanda6/wardline-x64  •  C-ABI v1  •  12 Rust Crates + 4-OS Zig Engines</text>
 </svg>

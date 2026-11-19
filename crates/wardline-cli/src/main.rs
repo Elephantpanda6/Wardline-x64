@@ -14,10 +14,13 @@ use wardline_approval::ApprovalStore;
 use wardline_cert::{
     verify_cert_chain, CertAuthority, CrlStore, WardCertChain,
 };
+use wardline_core::binary::{inspect_binary_file, BinaryFormat};
 use wardline_core::capability::CapabilityScope;
-use wardline_core::path::{normalize_windows_lexical_path, validate_safe_windows_path};
-use wardline_core::pe::{inspect_pe_file, PeClass};
-use wardline_core::{ActionRequest, IsolationLevel, NetMethod, TargetArch};
+use wardline_core::path::{normalize_host_lexical_path, validate_safe_host_path};
+use wardline_core::pe::PeClass;
+use wardline_core::{
+    detect_host_platform_profile, ActionRequest, IsolationLevel, NetMethod, TargetArch, TargetOs,
+};
 use wardline_guard::{
     decode_hex_32, init_guard_engine, send_pipe_request, serve_hardened_pipe, GuardInitOptions,
     GuardRequest, GuardResponse, DEFAULT_PIPE_NAME,
@@ -479,29 +482,73 @@ fn handle_doctor(json_out: bool) -> Result<()> {
     let (arch, abi) = wardline_sandbox::engine_identity();
     let caps = wardline_sandbox::probe_capabilities()
         .map_err(|code| anyhow::anyhow!("probe failed with status {code}"))?;
+    let profile = detect_host_platform_profile(caps.page_size, caps.is_wow64_emulated != 0);
     if json_out {
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "distro": arch.distro_tag(),
+                "os": profile.os,
+                "arch": profile.arch,
                 "abi": abi,
+                "device_class": profile.device_class,
+                "silicon_family": profile.silicon_family,
+                "logical_cpus": profile.logical_cpus,
+                "page_size": caps.page_size,
+                "emulation_layer": profile.emulation_layer,
+                "arm64_features": {
+                    "pac": caps.has_pac(),
+                    "bti": caps.has_bti(),
+                    "mte": caps.has_mte(),
+                    "sve": caps.has_sve(),
+                    "sve2": caps.has_sve2(),
+                    "large_pages": caps.has_large_pages(),
+                },
+                "l0_supported": true,
+                "l1_mechanism": profile.l1_mechanism,
+                "l1_supported": caps.appcontainer_supported != 0,
+                "l2_hypervisor": profile.l2_hypervisor,
+                "l2_available": caps.hyperv_hcs_available != 0,
+                "recommended_usecases": profile.recommended_usecases,
                 "capabilities": caps,
             }))?
         );
     } else {
         println!(
-            "wardline distro={} abi={} os_build={} appcontainer={} iocp={} cet={} pac_bti={} wow64={}",
+            "wardline distro={} abi={} device={:?} silicon={:?} cpus={} page={} l1='{}' l1_ok={} l2='{}' l2_ok={} pac={} bti={} mte={} sve={} cet={} wow64={}",
             arch.distro_tag(),
             abi,
-            caps.os_build_number,
+            profile.device_class,
+            profile.silicon_family,
+            profile.logical_cpus,
+            caps.page_size,
+            profile.l1_mechanism,
             caps.appcontainer_supported,
-            caps.job_object_iocp_supported,
+            profile.l2_hypervisor,
+            caps.hyperv_hcs_available,
+            caps.has_pac(),
+            caps.has_bti(),
+            caps.has_mte(),
+            caps.has_sve(),
             caps.cet_shadow_stack_supported,
-            caps.pac_bti_available,
             caps.is_wow64_emulated
         );
     }
     Ok(())
+}
+
+fn clean_canonical_cli(p: &Path) -> PathBuf {
+    let canon = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    #[cfg(windows)]
+    {
+        let s = canon.to_string_lossy();
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            if !rest.starts_with("UNC\\") {
+                return PathBuf::from(rest);
+            }
+        }
+    }
+    canon
 }
 
 fn resolve_exec_for_eval(raw: &str) -> PathBuf {
@@ -515,6 +562,7 @@ fn resolve_exec_for_eval(raw: &str) -> PathBuf {
             if direct.is_file() {
                 return direct;
             }
+            #[cfg(windows)]
             if p.extension().is_none() {
                 let with_exe = dir.join(format!("{raw}.exe"));
                 if with_exe.is_file() {
@@ -566,17 +614,17 @@ fn handle_policy(cmd: PolicyCmd) -> Result<()> {
         } => {
             let mut compiled = CompiledPolicy::from_toml_str(&std::fs::read_to_string(policy)?)?;
             let base = match base_dir {
-                Some(b) => std::fs::canonicalize(&b).unwrap_or(b),
-                None => std::env::current_dir()?,
+                Some(b) => clean_canonical_cli(&b),
+                None => clean_canonical_cli(&std::env::current_dir()?),
             };
             let anchor_norm = |raw: &str| -> Result<String> {
-                let norm = normalize_windows_lexical_path(raw)?;
+                let norm = normalize_host_lexical_path(raw)?;
                 if Path::new(&norm).is_absolute() {
                     Ok(norm)
                 } else if norm == "." {
-                    Ok(normalize_windows_lexical_path(&base.to_string_lossy())?)
+                    Ok(normalize_host_lexical_path(&base.to_string_lossy())?)
                 } else {
-                    Ok(normalize_windows_lexical_path(&base.join(&norm).to_string_lossy())?)
+                    Ok(normalize_host_lexical_path(&base.join(&norm).to_string_lossy())?)
                 }
             };
             for r in &mut compiled.read_roots {
@@ -589,8 +637,8 @@ fn handle_policy(cmd: PolicyCmd) -> Result<()> {
                     *r = a;
                 }
             }
-            let eval_path = if validate_safe_windows_path(&path).is_ok() {
-                if let Ok(norm) = normalize_windows_lexical_path(&path) {
+            let eval_path = if validate_safe_host_path(&path).is_ok() {
+                if let Ok(norm) = normalize_host_lexical_path(&path) {
                     if !Path::new(&norm).is_absolute() {
                         anchor_norm(&norm).unwrap_or(norm)
                     } else {
@@ -613,20 +661,24 @@ fn handle_policy(cmd: PolicyCmd) -> Result<()> {
         PolicyCmd::EvalExec { policy, executable } => {
             let compiled = CompiledPolicy::from_toml_str(&std::fs::read_to_string(policy)?)?;
             let resolved = resolve_exec_for_eval(&executable);
-            let pe_class = match inspect_pe_file(&resolved) {
-                Ok(info) => info.class,
-                Err(_) => PeClass::NotPe,
-            };
+            let binary_info = inspect_binary_file(&resolved).ok();
+            let pe_class = binary_info
+                .as_ref()
+                .map(|b| b.to_pe_class())
+                .unwrap_or(PeClass::NotPe);
             let action = ActionRequest::ProcessExec {
                 executable: resolved.to_string_lossy().into_owned(),
                 args: Vec::new(),
             };
+            let _ = BinaryFormat::Unknown;
             let decision = evaluate_action(
                 &compiled,
                 &action,
                 Some(ExecContext {
+                    host_os: TargetOs::host(),
                     host_arch: TargetArch::host(),
                     pe_class,
+                    binary_info,
                 }),
             );
             println!("{}", serde_json::to_string_pretty(&decision)?);

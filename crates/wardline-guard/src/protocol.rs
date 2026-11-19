@@ -8,7 +8,10 @@ use wardline_cert::WardCertChain;
 use wardline_core::NetMethod;
 use wardline_sandbox::{EngineStatus, HostCapabilitiesRaw};
 
+#[cfg(windows)]
 pub const DEFAULT_PIPE_NAME: &str = r"\\.\pipe\wardline_guard";
+#[cfg(unix)]
+pub const DEFAULT_PIPE_NAME: &str = "/tmp/wardline_guard.sock";
 pub const MAX_IPC_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

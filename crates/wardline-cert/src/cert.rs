@@ -5,7 +5,7 @@ use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use wardline_core::capability::{host_matches_pattern, CapabilityScope};
-use wardline_core::path::{is_lexical_prefix_match, normalize_windows_lexical_path};
+use wardline_core::path::{is_host_prefix_match, normalize_host_lexical_path};
 use wardline_core::{IsolationLevel, TargetArch};
 use zeroize::ZeroizeOnDrop;
 
@@ -186,10 +186,10 @@ fn scope_subsumed_by(child: &CapabilityScope, parent: &CapabilityScope) -> bool 
         (CapabilityScope::FsRead { root: c }, CapabilityScope::FsRead { root: p })
         | (CapabilityScope::FsWrite { root: c }, CapabilityScope::FsWrite { root: p })
         | (CapabilityScope::FsDelete { root: c }, CapabilityScope::FsDelete { root: p }) => {
-            is_lexical_prefix_match(c, p)
+            is_host_prefix_match(c, p)
         }
         (CapabilityScope::FsRead { root: c }, CapabilityScope::FsWrite { root: p }) => {
-            is_lexical_prefix_match(c, p)
+            is_host_prefix_match(c, p)
         }
         (CapabilityScope::Exec { binary: c }, CapabilityScope::Exec { binary: p }) => {
             if p == "*" || c.eq_ignore_ascii_case(p) {
@@ -199,8 +199,8 @@ fn scope_subsumed_by(child: &CapabilityScope, parent: &CapabilityScope) -> bool 
             } else {
                 matches!(
                     (
-                        normalize_windows_lexical_path(c),
-                        normalize_windows_lexical_path(p)
+                        normalize_host_lexical_path(c),
+                        normalize_host_lexical_path(p)
                     ),
                     (Ok(cn), Ok(pn)) if cn.eq_ignore_ascii_case(&pn)
                 )

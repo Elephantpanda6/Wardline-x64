@@ -4,7 +4,10 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-export const DEFAULT_PIPE_NAME = "\\\\.\\pipe\\wardline_guard";
+export const DEFAULT_PIPE_NAME =
+  process.platform === "win32"
+    ? "\\\\.\\pipe\\wardline_guard"
+    : "/tmp/wardline_guard.sock";
 const MAX_IPC_FRAME_BYTES = 16 * 1024 * 1024;
 
 export interface GuardResponse {

@@ -56,7 +56,8 @@ export fn wl_probe_capabilities(out_caps: ?*common.WlHostCapabilities) callconv(
         .hyperv_hcs_available = checkHcsAvailable(),
         .appcontainer_supported = if (os_ver.dwBuildNumber >= 9200 or os_ver.dwMajorVersion >= 10) 1 else 0,
         .job_object_iocp_supported = 1,
-        .reserved = .{ 0, 0 },
+        .os_kind = @intFromEnum(common.WlOsKind.windows),
+        .arm64_ext_flags = 0,
         .os_build_number = os_ver.dwBuildNumber,
         .page_size = sys_info.dwPageSize,
     };

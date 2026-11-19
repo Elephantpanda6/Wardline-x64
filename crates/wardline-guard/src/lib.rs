@@ -36,15 +36,28 @@ pub struct GuardInitOptions<'a> {
     pub seal_key_hex: Option<&'a str>,
 }
 
+fn clean_canonical(p: &Path) -> PathBuf {
+    let canon = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    #[cfg(windows)]
+    {
+        let s = canon.to_string_lossy();
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            if !rest.starts_with("UNC\\") {
+                return PathBuf::from(rest);
+            }
+        }
+    }
+    canon
+}
+
 pub fn init_guard_engine(opts: GuardInitOptions<'_>) -> Result<GuardEngine> {
     let policy_raw = std::fs::read_to_string(opts.policy_path)
         .with_context(|| format!("reading policy '{}'", opts.policy_path.display()))?;
     let policy = CompiledPolicy::from_toml_str(&policy_raw)?;
 
-    let abs_policy = std::fs::canonicalize(opts.policy_path)
-        .unwrap_or_else(|_| opts.policy_path.to_path_buf());
+    let abs_policy = clean_canonical(opts.policy_path);
     let base_dir = match opts.base_dir {
-        Some(b) => std::fs::canonicalize(b).unwrap_or_else(|_| b.to_path_buf()),
+        Some(b) => clean_canonical(b),
         None => std::env::current_dir().unwrap_or_else(|_| {
             abs_policy
                 .parent()

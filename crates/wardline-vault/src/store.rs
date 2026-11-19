@@ -256,7 +256,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
 
         let sid = current_user_sid_string().unwrap();
-        assert!(sid.starts_with("S-1-"));
+        assert!(sid.starts_with("S-1-") || sid.starts_with("uid:"));
 
         {
             let vault = VaultStore::open(&dir).unwrap();

@@ -1,6 +1,9 @@
 const std = @import("std");
-pub const win32 = @import("win32_ffi.zig");
-pub const sandbox = @import("sandbox_core.zig");
+const builtin = @import("builtin");
+
+pub const win32 = if (builtin.os.tag == .windows) @import("win32_ffi.zig") else struct {};
+pub const sandbox = if (builtin.os.tag == .windows) @import("sandbox_core.zig") else struct {};
+pub const posix = if (builtin.os.tag != .windows) @import("posix_sandbox.zig") else struct {};
 
 pub const abi_version: u32 = 1;
 
@@ -9,6 +12,22 @@ pub const WlArch = enum(u32) {
     x64 = 1,
     arm64 = 2,
 };
+
+pub const WlOsKind = enum(u8) {
+    unknown = 0,
+    windows = 1,
+    linux = 2,
+    macos = 3,
+    freebsd = 4,
+    other_unix = 5,
+};
+
+pub const WL_ARM64_FEAT_PAC: u8 = 0x01;
+pub const WL_ARM64_FEAT_BTI: u8 = 0x02;
+pub const WL_ARM64_FEAT_MTE: u8 = 0x04;
+pub const WL_ARM64_FEAT_SVE: u8 = 0x08;
+pub const WL_ARM64_FEAT_SVE2: u8 = 0x10;
+pub const WL_ARM64_FEAT_LARGE_PAGES: u8 = 0x20;
 
 pub const WlIsolationLevel = enum(u32) {
     l0_restricted_job = 0,
@@ -23,6 +42,22 @@ pub const WlPeClass = enum(u32) {
     arm64ec = 3,
     x86 = 4,
     script_or_raw = 5,
+};
+
+pub const WlBinaryFormat = enum(u8) {
+    unknown = 0,
+    pe = 1,
+    elf = 2,
+    macho = 3,
+    macho_universal = 4,
+    script_or_raw = 5,
+};
+
+pub const WlBinaryInfo = struct {
+    format: WlBinaryFormat,
+    arch: WlPeClass,
+    has_arm64: bool,
+    has_amd64: bool,
 };
 
 pub const WlStatusCode = enum(u32) {
@@ -53,7 +88,8 @@ pub const WlHostCapabilities = extern struct {
     hyperv_hcs_available: u8,
     appcontainer_supported: u8,
     job_object_iocp_supported: u8,
-    reserved: [2]u8,
+    os_kind: u8,
+    arm64_ext_flags: u8,
     os_build_number: u32,
     page_size: u32,
 };
@@ -134,6 +170,134 @@ pub fn classifyPeBytes(bytes: []const u8) WlPeClass {
     };
 }
 
+pub fn classifyElfBytes(bytes: []const u8) WlPeClass {
+    if (bytes.len < 20 or !std.mem.eql(u8, bytes[0..4], "\x7fELF")) return .unknown;
+    const ei_data = bytes[5];
+    const endian: std.builtin.Endian = switch (ei_data) {
+        1 => .little,
+        2 => .big,
+        else => return .unknown,
+    };
+    const e_machine = std.mem.readInt(u16, bytes[18..20], endian);
+    return switch (e_machine) {
+        183 => .arm64,
+        62 => .amd64,
+        3 => .x86,
+        else => .unknown,
+    };
+}
+
+fn mapMachoCpuType(cputype: u32) WlPeClass {
+    return switch (cputype) {
+        0x0100_000C => .arm64,
+        0x0100_0007 => .amd64,
+        7 => .x86,
+        else => .unknown,
+    };
+}
+
+pub fn classifyMachOBytes(bytes: []const u8) WlBinaryInfo {
+    if (bytes.len >= 28) {
+        const m4 = bytes[0..4];
+        const endian_opt: ?std.builtin.Endian = if (std.mem.eql(u8, m4, &.{ 0xCF, 0xFA, 0xED, 0xFE }) or
+            std.mem.eql(u8, m4, &.{ 0xCE, 0xFA, 0xED, 0xFE }))
+            .little
+        else if (std.mem.eql(u8, m4, &.{ 0xFE, 0xED, 0xFA, 0xCF }) or
+            std.mem.eql(u8, m4, &.{ 0xFE, 0xED, 0xFA, 0xCE }))
+            .big
+        else
+            null;
+        if (endian_opt) |endian| {
+            const cpu = std.mem.readInt(u32, bytes[4..8], endian);
+            const cls = mapMachoCpuType(cpu);
+            return .{
+                .format = .macho,
+                .arch = cls,
+                .has_arm64 = cls == .arm64,
+                .has_amd64 = cls == .amd64,
+            };
+        }
+    }
+
+    if (bytes.len >= 8) {
+        const m4 = bytes[0..4];
+        const fat_info: ?struct { fat64: bool, endian: std.builtin.Endian } = if (std.mem.eql(u8, m4, &.{ 0xCA, 0xFE, 0xBA, 0xBE }))
+            .{ .fat64 = false, .endian = .big }
+        else if (std.mem.eql(u8, m4, &.{ 0xBE, 0xBA, 0xFE, 0xCA }))
+            .{ .fat64 = false, .endian = .little }
+        else if (std.mem.eql(u8, m4, &.{ 0xCA, 0xFE, 0xBA, 0xBF }))
+            .{ .fat64 = true, .endian = .big }
+        else if (std.mem.eql(u8, m4, &.{ 0xBF, 0xBA, 0xFE, 0xCA }))
+            .{ .fat64 = true, .endian = .little }
+        else
+            null;
+        if (fat_info) |fi| {
+            const nfat = std.mem.readInt(u32, bytes[4..8], fi.endian);
+            if (nfat >= 1 and nfat <= 16) {
+                const entry_sz: usize = if (fi.fat64) 32 else 20;
+                const need = 8 + @as(usize, nfat) * entry_sz;
+                if (bytes.len >= need) {
+                    var has_arm64 = false;
+                    var has_amd64 = false;
+                    var primary: WlPeClass = .unknown;
+                    for (0..nfat) |i| {
+                        const off = 8 + i * entry_sz;
+                        const cpu = std.mem.readInt(u32, bytes[off..][0..4], fi.endian);
+                        const align_v = if (fi.fat64)
+                            std.mem.readInt(u32, bytes[off + 24 ..][0..4], fi.endian)
+                        else
+                            std.mem.readInt(u32, bytes[off + 16 ..][0..4], fi.endian);
+                        if (align_v > 30) {
+                            return .{ .format = .script_or_raw, .arch = .script_or_raw, .has_arm64 = false, .has_amd64 = false };
+                        }
+                        const cls = mapMachoCpuType(cpu);
+                        if (cls == .arm64) has_arm64 = true;
+                        if (cls == .amd64) has_amd64 = true;
+                        if (primary == .unknown) primary = cls;
+                    }
+                    return .{
+                        .format = .macho_universal,
+                        .arch = primary,
+                        .has_arm64 = has_arm64,
+                        .has_amd64 = has_amd64,
+                    };
+                }
+            }
+        }
+    }
+
+    return .{
+        .format = .script_or_raw,
+        .arch = .script_or_raw,
+        .has_arm64 = false,
+        .has_amd64 = false,
+    };
+}
+
+pub fn classifyBinaryBytes(bytes: []const u8) WlBinaryInfo {
+    if (bytes.len >= 64 and bytes[0] == 'M' and bytes[1] == 'Z') {
+        const pe_cls = classifyPeBytes(bytes);
+        if (pe_cls != .script_or_raw) {
+            return .{
+                .format = .pe,
+                .arch = pe_cls,
+                .has_arm64 = pe_cls == .arm64,
+                .has_amd64 = pe_cls == .amd64,
+            };
+        }
+    }
+    if (bytes.len >= 20 and std.mem.eql(u8, bytes[0..4], "\x7fELF")) {
+        const elf_cls = classifyElfBytes(bytes);
+        return .{
+            .format = .elf,
+            .arch = elf_cls,
+            .has_arm64 = elf_cls == .arm64,
+            .has_amd64 = elf_cls == .amd64,
+        };
+    }
+    return classifyMachOBytes(bytes);
+}
+
 pub fn writeDetail(io: *WlIoBuffers, res: *WlSpawnResult, msg: []const u8) void {
     const ptr = io.detail_ptr orelse {
         res.detail_len = 0;
@@ -162,4 +326,39 @@ test "classifyPeBytes detects MZ non-PE and AMD64/ARM64/ARM64EC headers" {
 
     const bat = "@echo off\necho hi\n";
     try std.testing.expectEqual(WlPeClass.script_or_raw, classifyPeBytes(bat));
+}
+
+test "classifyBinaryBytes detects ELF64 and Mach-O headers" {
+    var elf: [64]u8 = @splat(0);
+    @memcpy(elf[0..4], "\x7fELF");
+    elf[4] = 2;
+    elf[5] = 1;
+    std.mem.writeInt(u16, elf[18..20], 183, .little);
+    const elf_arm = classifyBinaryBytes(&elf);
+    try std.testing.expectEqual(WlBinaryFormat.elf, elf_arm.format);
+    try std.testing.expect(elf_arm.has_arm64);
+
+    std.mem.writeInt(u16, elf[18..20], 62, .little);
+    const elf_x64 = classifyBinaryBytes(&elf);
+    try std.testing.expectEqual(WlBinaryFormat.elf, elf_x64.format);
+    try std.testing.expect(elf_x64.has_amd64);
+
+    var macho: [32]u8 = @splat(0);
+    @memcpy(macho[0..4], &[_]u8{ 0xCF, 0xFA, 0xED, 0xFE });
+    std.mem.writeInt(u32, macho[4..8], 0x0100_000C, .little);
+    const m_arm = classifyBinaryBytes(&macho);
+    try std.testing.expectEqual(WlBinaryFormat.macho, m_arm.format);
+    try std.testing.expect(m_arm.has_arm64);
+
+    var fat: [48]u8 = @splat(0);
+    @memcpy(fat[0..4], &[_]u8{ 0xCA, 0xFE, 0xBA, 0xBE });
+    std.mem.writeInt(u32, fat[4..8], 2, .big);
+    std.mem.writeInt(u32, fat[8..12], 0x0100_0007, .big);
+    std.mem.writeInt(u32, fat[24..28], 14, .big);
+    std.mem.writeInt(u32, fat[28..32], 0x0100_000C, .big);
+    std.mem.writeInt(u32, fat[44..48], 14, .big);
+    const m_fat = classifyBinaryBytes(&fat);
+    try std.testing.expectEqual(WlBinaryFormat.macho_universal, m_fat.format);
+    try std.testing.expect(m_fat.has_arm64);
+    try std.testing.expect(m_fat.has_amd64);
 }

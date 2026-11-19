@@ -1,0 +1,57 @@
+# Wardline Profile: x86_64 Developer Workstation / Desktop (Windows x64, Linux x64, macOS x64)
+version = 1
+name = "x64-workstation-dev"
+
+[architecture]
+mode = "strict_native"
+
+[execution]
+isolation = "L1"
+working_dir = "."
+inherit_env = false
+allowed_env = ["PATH", "SystemRoot", "TEMP", "TMP", "HOME", "USER"]
+deny_scripts = true
+deny_lolbins = true
+timeout_ms = 30000
+max_memory_mb = 1024
+max_processes = 24
+cpu_rate_percent = 75
+acg = true
+cet_shadow_stack = true
+
+[filesystem]
+workspace_read = ["."]
+workspace_write = ["."]
+denied_prefixes = [
+    "C:\\Windows\\System32\\config",
+    "\\\\?\\",
+    "\\\\",
+    "/etc/shadow",
+    "/etc/sudoers",
+    "/System/Library",
+]
+
+[network]
+egress_mode = "proxy_only"
+allow_ipv6 = false
+allow_private_ips = false
+allow_metadata_ips = false
+allowed_destinations = [
+    "https://api.github.com/**",
+    "https://crates.io/**",
+    "https://registry.npmjs.org/**",
+]
+
+[credentials]
+allowed_grants = []
+max_bytes_per_request = 2097152
+
+[approvals]
+require_on_write = true
+require_on_network_post = true
+default_ttl_secs = 300
+
+[audit]
+log_path = ".wardline/audit.wlog"
+lock_mode = "exclusive_blocking"
+seal_interval_events = 64

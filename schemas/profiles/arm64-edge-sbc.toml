@@ -1,0 +1,54 @@
+# Wardline Profile: ARM64 Edge / Single-Board Computer (Raspberry Pi 4/5, Jetson Orin, Rockchip)
+version = 1
+name = "arm64-edge-sbc"
+
+[architecture]
+mode = "strict_native"
+
+[execution]
+isolation = "L1"
+working_dir = "."
+inherit_env = false
+allowed_env = ["PATH"]
+deny_scripts = true
+deny_lolbins = true
+timeout_ms = 10000
+max_memory_mb = 256
+max_processes = 8
+cpu_rate_percent = 50
+acg = true
+cet_shadow_stack = false
+
+[filesystem]
+workspace_read = ["."]
+workspace_write = []
+denied_prefixes = [
+    "/etc/shadow",
+    "/etc/sudoers",
+    "/dev/mem",
+    "/dev/kmem",
+    "/sys/class/gpio",
+    "/boot",
+]
+
+[network]
+# Air-gapped / field appliance default: zero outbound HTTP proxy traffic.
+egress_mode = "blocked"
+allow_ipv6 = false
+allow_private_ips = false
+allow_metadata_ips = false
+allowed_destinations = []
+
+[credentials]
+allowed_grants = []
+max_bytes_per_request = 262144
+
+[approvals]
+require_on_write = true
+require_on_network_post = true
+default_ttl_secs = 120
+
+[audit]
+log_path = ".wardline/audit.wlog"
+lock_mode = "exclusive_blocking"
+seal_interval_events = 16

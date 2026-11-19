@@ -8,19 +8,20 @@ use base64::Engine;
 use uuid::Uuid;
 use wardline_approval::{compute_bound_action_digest, ApprovalStore};
 use wardline_cert::{verify_cert_chain, CrlStore, WardCertChain};
+use wardline_core::binary::{inspect_binary_file, BinaryFormat};
 use wardline_core::capability::{host_matches_pattern, parse_canonical_destination, CapabilityScope};
-use wardline_core::path::{is_lexical_prefix_match, normalize_windows_lexical_path, validate_safe_windows_path};
-use wardline_core::pe::{inspect_pe_file, PeClass};
-use wardline_core::{ActionRequest, ArchExecutionMode, Decision, NetMethod, TargetArch};
+use wardline_core::path::{is_host_prefix_match, normalize_host_lexical_path, validate_safe_host_path};
+use wardline_core::{ActionRequest, ArchExecutionMode, Decision, NetMethod, TargetArch, TargetOs};
 use wardline_egress::{execute_egress_request, EgressError, EgressRequest};
 use wardline_log::{AuditEvent, WalWriter};
 use wardline_policy::{evaluate_action, CompiledPolicy, ExecContext};
 use wardline_sandbox::{engine_identity, probe_capabilities, spawn_isolated, EngineStatus, SpawnConfig};
 use wardline_vault::{StreamingScrubber, VaultStore};
 
+#[cfg(windows)]
+use crate::file_broker::canonicalize_existing_path_no_follow;
 use crate::file_broker::{
-    broker_read, broker_write, canonicalize_existing_path_no_follow, check_denied_prefixes,
-    is_path_within_policy_or_base, BrokerError,
+    broker_read, broker_write, check_denied_prefixes, is_path_within_policy_or_base, BrokerError,
 };
 use crate::protocol::{
     CapabilityLearnPayload, FileReadPayload, FileWritePayload, GuardRequest, GuardResponse,
@@ -83,7 +84,14 @@ fn quote_win32_cmdline(exe: &str, args: &[String]) -> String {
 
 fn canonicalize_if_exists(path: PathBuf) -> Result<PathBuf, String> {
     if path.exists() || path.symlink_metadata().is_ok() {
-        canonicalize_existing_path_no_follow(&path).map_err(|e| e.to_string())
+        #[cfg(windows)]
+        {
+            canonicalize_existing_path_no_follow(&path).map_err(|e| e.to_string())
+        }
+        #[cfg(unix)]
+        {
+            std::fs::canonicalize(&path).map_err(|e| e.to_string())
+        }
     } else {
         Ok(path)
     }
@@ -98,7 +106,7 @@ fn resolve_working_dir(
         Some(w) => w,
         None => default_working_dir,
     };
-    validate_safe_windows_path(raw).map_err(|e| e.to_string())?;
+    validate_safe_host_path(raw).map_err(|e| e.to_string())?;
     let p = Path::new(raw);
     let candidate = if p.is_absolute() {
         p.to_path_buf()
@@ -111,7 +119,7 @@ fn resolve_working_dir(
 }
 
 fn resolve_executable_with_origin(raw: &str, working_dir: &Path) -> Result<(PathBuf, bool), String> {
-    validate_safe_windows_path(raw).map_err(|e| e.to_string())?;
+    validate_safe_host_path(raw).map_err(|e| e.to_string())?;
     let p = Path::new(raw);
     if p.is_absolute() {
         return Ok((canonicalize_if_exists(p.to_path_buf())?, false));
@@ -123,6 +131,7 @@ fn resolve_executable_with_origin(raw: &str, working_dir: &Path) -> Result<(Path
     if local.is_file() {
         return Ok((canonicalize_if_exists(local)?, true));
     }
+    #[cfg(windows)]
     if p.extension().is_none() {
         let local_exe = working_dir.join(format!("{raw}.exe"));
         if local_exe.is_file() {
@@ -135,6 +144,7 @@ fn resolve_executable_with_origin(raw: &str, working_dir: &Path) -> Result<(Path
             if direct.is_file() {
                 return Ok((canonicalize_if_exists(direct)?, false));
             }
+            #[cfg(windows)]
             if p.extension().is_none() {
                 let with_exe = dir.join(format!("{raw}.exe"));
                 if with_exe.is_file() {
@@ -147,8 +157,8 @@ fn resolve_executable_with_origin(raw: &str, working_dir: &Path) -> Result<(Path
 }
 
 fn anchor_scope_path(raw: &str, base_dir: &Path) -> Result<String, String> {
-    validate_safe_windows_path(raw).map_err(|e| e.to_string())?;
-    let norm = normalize_windows_lexical_path(raw).map_err(|e| e.to_string())?;
+    validate_safe_host_path(raw).map_err(|e| e.to_string())?;
+    let norm = normalize_host_lexical_path(raw).map_err(|e| e.to_string())?;
     let p = Path::new(&norm);
     let joined = if p.is_absolute() {
         p.to_path_buf()
@@ -157,18 +167,17 @@ fn anchor_scope_path(raw: &str, base_dir: &Path) -> Result<String, String> {
     } else {
         base_dir.join(p)
     };
-    let lex = normalize_windows_lexical_path(&joined.to_string_lossy()).map_err(|e| e.to_string())?;
+    let lex = normalize_host_lexical_path(&joined.to_string_lossy()).map_err(|e| e.to_string())?;
     let pb = Path::new(&lex);
     if pb.exists() || pb.symlink_metadata().is_ok() {
-        let canon = canonicalize_existing_path_no_follow(pb).map_err(|e| e.to_string())?;
-        return normalize_windows_lexical_path(&canon.to_string_lossy())
+        let canon = canonicalize_if_exists(pb.to_path_buf())?;
+        return normalize_host_lexical_path(&canon.to_string_lossy())
             .map_err(|e| e.to_string());
     }
     if let (Some(parent), Some(name)) = (pb.parent(), pb.file_name()) {
         if parent.exists() || parent.symlink_metadata().is_ok() {
-            let canon_parent =
-                canonicalize_existing_path_no_follow(parent).map_err(|e| e.to_string())?;
-            return normalize_windows_lexical_path(&canon_parent.join(name).to_string_lossy())
+            let canon_parent = canonicalize_if_exists(parent.to_path_buf())?;
+            return normalize_host_lexical_path(&canon_parent.join(name).to_string_lossy())
                 .map_err(|e| e.to_string());
         }
     }
@@ -176,28 +185,51 @@ fn anchor_scope_path(raw: &str, base_dir: &Path) -> Result<String, String> {
 }
 
 fn is_trusted_system_exec_path(candidate: &str) -> bool {
-    let mut roots = vec![
-        std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string()),
-    ];
-    for var in ["ProgramFiles", "ProgramFiles(x86)"] {
-        if let Ok(val) = std::env::var(var) {
-            if !val.trim().is_empty() {
-                roots.push(val);
+    #[cfg(windows)]
+    let roots: Vec<String> = {
+        let mut r = vec![
+            std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string()),
+        ];
+        for var in ["ProgramFiles", "ProgramFiles(x86)"] {
+            if let Ok(val) = std::env::var(var) {
+                if !val.trim().is_empty() {
+                    r.push(val);
+                }
             }
         }
-    }
+        r
+    };
+    #[cfg(unix)]
+    let roots: Vec<String> = {
+        let mut r = vec![
+            "/usr/bin".to_string(),
+            "/bin".to_string(),
+            "/usr/sbin".to_string(),
+            "/sbin".to_string(),
+            "/usr/lib".to_string(),
+            "/usr/libexec".to_string(),
+            "/usr/local/bin".to_string(),
+            "/usr/local/libexec".to_string(),
+        ];
+        if cfg!(target_os = "macos") {
+            r.push("/opt/homebrew/bin".to_string());
+            r.push("/opt/homebrew/Cellar".to_string());
+        }
+        r
+    };
+
     for raw in roots {
         let pb = PathBuf::from(&raw);
-        let norm = normalize_windows_lexical_path(&raw).ok();
+        let norm = normalize_host_lexical_path(&raw).ok();
         let canon = canonicalize_if_exists(pb)
             .ok()
-            .and_then(|p| normalize_windows_lexical_path(&p.to_string_lossy()).ok());
+            .and_then(|p| normalize_host_lexical_path(&p.to_string_lossy()).ok());
         if norm
             .as_deref()
-            .is_some_and(|r| is_lexical_prefix_match(candidate, r))
+            .is_some_and(|r| is_host_prefix_match(candidate, r))
             || canon
                 .as_deref()
-                .is_some_and(|r| is_lexical_prefix_match(candidate, r))
+                .is_some_and(|r| is_host_prefix_match(candidate, r))
         {
             return true;
         }
@@ -218,7 +250,7 @@ fn cert_scope_allows(
             let ok = scopes.iter().any(|s| match s {
                 CapabilityScope::FsRead { root } | CapabilityScope::FsWrite { root } => {
                     anchor_scope_path(root, base_dir)
-                        .map(|r| is_lexical_prefix_match(&anchored, &r))
+                        .map(|r| is_host_prefix_match(&anchored, &r))
                         .unwrap_or(false)
                 }
                 _ => false,
@@ -233,7 +265,7 @@ fn cert_scope_allows(
             let anchored = anchor_scope_path(path, base_dir)?;
             let ok = scopes.iter().any(|s| match s {
                 CapabilityScope::FsWrite { root } => anchor_scope_path(root, base_dir)
-                    .map(|r| is_lexical_prefix_match(&anchored, &r))
+                    .map(|r| is_host_prefix_match(&anchored, &r))
                     .unwrap_or(false),
                 _ => false,
             });
@@ -250,7 +282,7 @@ fn cert_scope_allows(
         } => {
             let cwd = resolve_working_dir(base_dir, working_dir.as_deref(), default_working_dir)?;
             let (resolved_exe, resolved_from_cwd) = resolve_executable_with_origin(executable, &cwd)?;
-            let resolved_norm = normalize_windows_lexical_path(&resolved_exe.to_string_lossy())
+            let resolved_norm = normalize_host_lexical_path(&resolved_exe.to_string_lossy())
                 .map_err(|e| e.to_string())?;
             let resolved_file = Path::new(&resolved_norm)
                 .file_name()
@@ -687,6 +719,15 @@ impl GuardEngine {
                 || k.eq_ignore_ascii_case("PATH")
                 || k.eq_ignore_ascii_case("SystemRoot")
                 || k.eq_ignore_ascii_case("WINDIR")
+                || k.eq_ignore_ascii_case("LD_PRELOAD")
+                || k.eq_ignore_ascii_case("LD_LIBRARY_PATH")
+                || k.eq_ignore_ascii_case("LD_AUDIT")
+                || k.eq_ignore_ascii_case("DYLD_INSERT_LIBRARIES")
+                || k.eq_ignore_ascii_case("DYLD_LIBRARY_PATH")
+                || k.eq_ignore_ascii_case("DYLD_FRAMEWORK_PATH")
+                || k.eq_ignore_ascii_case("IFS")
+                || k.eq_ignore_ascii_case("BASH_ENV")
+                || k.eq_ignore_ascii_case("ENV")
         }) {
             return self.deny_exec(
                 &executable,
@@ -708,7 +749,7 @@ impl GuardEngine {
                 format!("working_dir '{}' is not an existing directory", cwd.display()),
             );
         }
-        let cwd_str = match normalize_windows_lexical_path(&cwd.to_string_lossy()) {
+        let cwd_str = match normalize_host_lexical_path(&cwd.to_string_lossy()) {
             Ok(s) => s,
             Err(e) => return self.deny_exec(&executable, e.to_string()),
         };
@@ -740,7 +781,7 @@ impl GuardEngine {
             );
         }
 
-        let exe_str = match normalize_windows_lexical_path(&resolved_exe.to_string_lossy()) {
+        let exe_str = match normalize_host_lexical_path(&resolved_exe.to_string_lossy()) {
             Ok(s) => s,
             Err(e) => return self.deny_exec(&executable, e.to_string()),
         };
@@ -759,10 +800,18 @@ impl GuardEngine {
             );
         }
 
-        let pe_class = match inspect_pe_file(&resolved_exe) {
-            Ok(info) => info.class,
-            Err(_) => PeClass::NotPe,
-        };
+        let binary_info = inspect_binary_file(&resolved_exe).ok();
+        let pe_class = binary_info
+            .as_ref()
+            .map(|b| b.to_pe_class())
+            .unwrap_or(wardline_core::PeClass::NotPe);
+        if binary_info
+            .as_ref()
+            .is_some_and(|b| b.format == BinaryFormat::ScriptOrRaw)
+            && self.cfg.policy.manifest.execution.deny_scripts
+        {
+            return self.deny_exec(&exe_str, "non-executable script or raw file execution denied".into());
+        }
 
         let action = ActionRequest::ProcessExec {
             executable: exe_str.clone(),
@@ -772,8 +821,10 @@ impl GuardEngine {
             &self.cfg.policy,
             &action,
             Some(ExecContext {
+                host_os: TargetOs::host(),
                 host_arch: TargetArch::host(),
                 pe_class,
+                binary_info,
             }),
         );
 
@@ -860,7 +911,7 @@ impl GuardEngine {
             } else {
                 self.cfg.base_dir.join(p)
             };
-            normalize_windows_lexical_path(&joined.to_string_lossy())
+            normalize_host_lexical_path(&joined.to_string_lossy())
                 .unwrap_or_else(|_| joined.to_string_lossy().into_owned())
         };
 
@@ -893,9 +944,24 @@ impl GuardEngine {
         .take(63)
         .collect();
 
+        #[cfg(windows)]
+        let cmdline = quote_win32_cmdline(&exe_str, &args);
+        #[cfg(unix)]
+        let cmdline = {
+            let _ = quote_win32_cmdline;
+            if args.is_empty() {
+                exe_str.clone()
+            } else {
+                let mut parts = Vec::with_capacity(1 + args.len());
+                parts.push(exe_str.clone());
+                parts.extend(args);
+                parts.join("\0")
+            }
+        };
+
         let spawn_cfg = SpawnConfig {
             executable: exe_str.clone(),
-            cmdline: quote_win32_cmdline(&exe_str, &args),
+            cmdline,
             working_dir: cwd_str,
             env_pairs: self.build_child_env(&env_overrides),
             container_name,
@@ -1150,34 +1216,77 @@ mod tests {
         };
         assert!(cert_scope_allows(&fs_scopes, &read_req, &base, ".").is_ok());
 
-        let system_whoami = r"C:\Windows\System32\whoami.exe";
-        if Path::new(system_whoami).is_file() {
-            let scoped_sys = vec![CapabilityScope::Exec {
-                binary: system_whoami.into(),
+        #[cfg(windows)]
+        {
+            let system_whoami = r"C:\Windows\System32\whoami.exe";
+            if Path::new(system_whoami).is_file() {
+                let scoped_sys = vec![CapabilityScope::Exec {
+                    binary: system_whoami.into(),
+                }];
+                let bare_req = GuardRequest::RunTool {
+                    executable: "whoami.exe".into(),
+                    args: vec![],
+                    working_dir: None,
+                    env_overrides: vec![],
+                    cert_chain: None,
+                    approval_ticket_id: None,
+                };
+                assert!(cert_scope_allows(&scoped_sys, &bare_req, &base, ".").is_ok());
+            }
+
+            let bare_scope = vec![CapabilityScope::Exec {
+                binary: "whoami.exe".into(),
             }];
-            let bare_req = GuardRequest::RunTool {
+            let hijack_req = GuardRequest::RunTool {
                 executable: "whoami.exe".into(),
                 args: vec![],
-                working_dir: None,
+                working_dir: Some(rogue_dir.to_string_lossy().into_owned()),
                 env_overrides: vec![],
                 cert_chain: None,
                 approval_ticket_id: None,
             };
-            assert!(cert_scope_allows(&scoped_sys, &bare_req, &base, ".").is_ok());
+            assert!(cert_scope_allows(&bare_scope, &hijack_req, &base, ".").is_err());
         }
 
-        let bare_scope = vec![CapabilityScope::Exec {
-            binary: "whoami.exe".into(),
-        }];
-        let hijack_req = GuardRequest::RunTool {
-            executable: "whoami.exe".into(),
-            args: vec![],
-            working_dir: Some(rogue_dir.to_string_lossy().into_owned()),
-            env_overrides: vec![],
-            cert_chain: None,
-            approval_ticket_id: None,
-        };
-        assert!(cert_scope_allows(&bare_scope, &hijack_req, &base, ".").is_err());
+        #[cfg(unix)]
+        {
+            if let Some(sys_bin) = ["/usr/bin/id", "/bin/echo", "/usr/bin/uname"]
+                .into_iter()
+                .find(|p| Path::new(p).is_file())
+            {
+                let bin_name = Path::new(sys_bin)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                std::fs::write(rogue_dir.join(&bin_name), b"not-real").unwrap();
+                let canon_bin = std::fs::canonicalize(sys_bin)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                let scoped_sys = vec![CapabilityScope::Exec { binary: canon_bin }];
+                let bare_req = GuardRequest::RunTool {
+                    executable: bin_name.clone(),
+                    args: vec![],
+                    working_dir: None,
+                    env_overrides: vec![],
+                    cert_chain: None,
+                    approval_ticket_id: None,
+                };
+                assert!(cert_scope_allows(&scoped_sys, &bare_req, &base, ".").is_ok());
+
+                let bare_scope = vec![CapabilityScope::Exec { binary: bin_name.clone() }];
+                let hijack_req = GuardRequest::RunTool {
+                    executable: bin_name,
+                    args: vec![],
+                    working_dir: Some(rogue_dir.to_string_lossy().into_owned()),
+                    env_overrides: vec![],
+                    cert_chain: None,
+                    approval_ticket_id: None,
+                };
+                assert!(cert_scope_allows(&bare_scope, &hijack_req, &base, ".").is_err());
+            }
+        }
 
         let _ = std::fs::remove_dir_all(&base);
     }

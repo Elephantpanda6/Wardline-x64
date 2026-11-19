@@ -1,128 +1,51 @@
-# Wardline (`win-x64`) — System Architecture Specification
+# Wardline System Architecture (x64 Focus, Multi-OS)
 
-This document provides the deep technical specification of **Wardline (`win-x64`)**, detailing process boundaries, C-ABI v1 FFI contracts between Rust and Zig, Win32 kernel isolation mechanics, IPC wire framing, and cryptographic state formats.
+Wardline separates untrusted AI/automation callers from privileged OS, filesystem, credential, and network execution via a clean 4-zone, 12-crate Rust + Zig kernel containment architecture.
 
-<p align="center">
-  <a href="../assets/architecture-x64.png">
-    <img src="../assets/architecture-x64.png" alt="Wardline Windows x64 Architecture Diagram" width="100%"/>
-  </a>
-</p>
+![Wardline Architecture](assets/architecture-x64.png)
 
-> Lossless vector source: [`assets/architecture-x64.svg`](../assets/architecture-x64.svg) (`3600×2400` SVG) • Ultra-HD raster: [`assets/architecture-x64.png`](../assets/architecture-x64.png) (`4800×3200` PNG).
+## 1. Crate Structure (12 Workspace Crates)
 
----
+| Crate | Responsibility | Safety Profile |
+|---|---|---|
+| `wardline-core` | Path canonicalization/jail checks, 25 Win + 34 Unix LOLBin & script shield, multi-format binary inspector (`PE`, `ELF`, `Mach-O`, `MachOFat`), host `TargetOs`/`DeviceClass`/`SiliconFamily` detection, PE & ELF property note parsing | `#![forbid(unsafe_code)]` |
+| `wardline-policy` | Schema v1 TOML compiler, deterministic `Allow`/`NeedApproval`/`Deny` evaluator, binary & ISA preflight gating | `#![forbid(unsafe_code)]` |
+| `wardline-cert` | Ed25519 CBOR capability certificates (`"wardline.cert.v1\0"`), monotonic attenuation verification, scope matcher (`fs-read`, `fs-write`, `fs-delete`, `exec`, `net:host[:/path]`, `vault:grant_id`) | `#![forbid(unsafe_code)]` |
+| `wardline-approval` | Single-use HITL approval tickets stored in `redb` (`approvals.redb`), cryptographically bound to `BLAKE3("wardline.approval.v1\0" || action)` | `#![forbid(unsafe_code)]` |
+| `wardline-log` | Append-only `WLG1` CBOR write-ahead audit log, BLAKE3 chain hashing, Ed25519 checkpoints, exclusive locking (`LockFileEx` on Windows, `flock` on Unix) | Win32 / POSIX FFI |
+| `wardline-vault` | `ChaCha20Poly1305` encrypted credential store, Win32 DPAPI master key wrapping or `0700/0600 WLV1` Unix custody, `VirtualLock`/`mlock` + zeroize-on-drop `SecretBytes`, cross-chunk `StreamingScrubber` | Win32 / POSIX FFI |
+| `wardline-sandbox` | C-ABI v1 FFI wrapper linking the Zig kernel engine selected by target `(OS, Arch, ABI)`, surfacing `HostCapabilitiesRaw` (`os_kind`, `cet_shadow_stack_supported`, `page_size`) | Zig FFI |
+| `wardline-egress` | SSRF-immune HTTP(S) proxy dialer (`localhost`/`RFC1918`/`CGNAT`/`IMDS`/`*.local`/`*.internal` denied, single pinned DNS lookup into TLS connector), vault header injection, bounded streaming response scrubber | `#![forbid(unsafe_code)]` |
+| `wardline-guard` | Trusted daemon coordinator: hardened IPC listener (Win32 Named Pipe `PIPE_TYPE_BYTE` + SDDL / Unix UDS `0600` + `SO_PEERCRED`), CRL (`crl.redb`), WAL, `file_broker` (reparse/symlink walk), child dispatch | Win32 / POSIX FFI |
+| `wardline-mcp` | Stateless stdio MCP JSON-RPC `2024-11-05` server exposing `wardline_exec`, `wardline_fetch`, `wardline_fs_read`, `wardline_fs_write`, `wardline_learn` | `#![forbid(unsafe_code)]` |
+| `wardline-verify` | Independent zero-trust offline CLI verifier recomputing every BLAKE3 chain link and Ed25519 checkpoint in `audit.wlog` | `#![forbid(unsafe_code)]` |
+| `wardline-cli` | Operator & admin CLI (`run`, `fetch`, `doctor`, `policy`, `cert`, `vault`, `approve`, `audit`) | Safe CLI orchestrator |
 
-## 1. Five-Zone Architectural Partitioning
+## 2. Zig Kernel Engines & C-ABI v1 (`platforms/`)
 
-Wardline separates **untrusted parsing & AI protocol adapters** from the **Trusted Computing Base (`wardline-guard`)** and delegates **OS-level containment & mitigation primitives** to a minimal Zig static library compiled natively for `x86_64-windows-msvc`.
+Every OS and architecture shares the single binary C-ABI defined in [`platforms/common/wardline_abi.h`](../platforms/common/wardline_abi.h) and [`platforms/common/common.zig`](../platforms/common/common.zig):
 
-### Zone 1: Caller & Protocol Adapter Plane (Unprivileged Edge)
+- `wl_engine_abi_version() -> u32`
+- `wl_engine_arch() -> u32`
+- `wl_classify_pe(bytes_ptr, bytes_len) -> u32`
+- `wl_probe_capabilities(out_caps: *WlHostCapabilities) -> u32`
+- `wl_spawn_isolated(req, io, res) -> u32`
+- `wl_create_hardened_pipe(...)` (Windows only; returns `not_supported_arch` on POSIX where UDS is managed natively)
+- `wl_set_owner_only_dacl_utf8(...)` (Windows DACL / POSIX `0700`/`0600` mode)
+- `wl_harden_current_process_dacl(...)` (Windows `PROTECTED_DACL_SECURITY_INFORMATION` / Linux `PR_SET_DUMPABLE=0`)
 
-Components outside the TCB:
-- **MCP Hosts & Language SDKs**: Claude Desktop, Cursor, IDE agents, [`clients/python/wardline_client/`](../clients/python/wardline_client/__init__.py), [`clients/ts/src/index.ts`](../clients/ts/src/index.ts), and `wardline.exe`.
-- **`wardline-mcp.exe` (`#![forbid(unsafe_code)]`)**: Reads newline-delimited JSON-RPC 2.0 on `stdin`, responds on `stdout`, ignores JSON-RPC notifications (no `id`), and speaks MCP `protocolVersion: "2024-11-05"`. It holds **no vault keys, no child process handles, and no network sockets**.
-- **Hardened Named Pipe IPC Transport**:
-  - Default pipe: `DEFAULT_PIPE_NAME = r"\\.\pipe\wardline_guard"`.
-  - Wire framing: `[u32 LE length <= MAX_IPC_FRAME_BYTES (16 MiB)][UTF-8 JSON GuardRequest/GuardResponse]`.
-  - Server flags applied via Zig/Win32 `createHardenedPipeImpl`:
-    - `PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE | FILE_FLAG_OVERLAPPED` (prevents pipe-squatting / impersonation hijack by another local process attaching a second server instance).
-    - `PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS` (blocks SMB/network named-pipe relay attacks while preserving exact length-prefixed framing).
-    - Explicit Protected SDDL: `D:P(A;OICI;GA;;;{UserSID})(A;OICI;GA;;;SY)` granting access exclusively to the launching user SID and `SYSTEM`.
-  - Process DACL hardening (`hardenCurrentProcessDaclImpl`): calls `SetSecurityInfo(..., SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, ...)` so ambient same-session tools cannot inspect `wardline-guard.exe` memory.
+### Engine Targets (`build.zig`)
+- `platforms/win-x64/engine_x64.zig` + `sandbox_core.zig` (`x86_64-windows-msvc` / `x86_64-windows-gnu`)
+- `platforms/linux/engine_linux.zig` + `posix_sandbox.zig` (`x86_64-linux-gnu` / `x86_64-linux-musl` / `aarch64-linux-*`)
+- `platforms/macos/engine_macos.zig` + `posix_sandbox.zig` (`x86_64-macos` / `aarch64-macos`)
+- `platforms/bsd/engine_bsd.zig` + `posix_sandbox.zig` (`x86_64-freebsd` / `aarch64-freebsd`)
 
-### Zone 2: Trusted Computing Base (`wardline-guard.exe` / `GuardEngine`)
+All four engines cross-compile with zero external SDK dependencies via `zig build all-engines`. When Rust compiles on a minimal host without Zig, `WARDLINE_PREBUILT_ENGINE_DIR` points `crates/wardline-sandbox/build.rs` to the directory containing `libwardline_engine_x64.a` / `wardline_engine_x64.lib`.
 
-Every `GuardRequest` (`Health`, `CapabilityLearn`, `RunTool`, `HttpFetch`, `BrokerFileRead`, `BrokerFileWrite`) passes through an ordered pipeline in [`daemon.rs`](../crates/wardline-guard/src/daemon.rs):
+## 3. IPC & Trust Boundaries
 
-1. **Identity & Delegation (`wardline-cert`)**:
-   - When `--require-cert` or a cert chain is provided, validates the `Ed25519` signature chain over canonical CBOR (`domain = b"wardline.cert.v1\0"`) back to `--root-pubkey`.
-   - Enforces `validate_monotonic_attenuation()` across every parent → child link (TTL non-increasing, isolation level non-weakening, arch compatibility, remaining depth strictly decreasing, capabilities subset-checked).
-   - Consults durable `.wardline/crl.redb` for revoked certificate UUIDs.
-   - Evaluates `cert_scope_allows()` against canonical scopes (`fs-read:`, `fs-write:`, `fs-delete:`, `exec:`, `net:host[:/path]`, `vault:id`).
-2. **Policy, LOLBin & Path Shield (`wardline-policy` + `wardline-core`)**:
-   - Validates executable paths against `lolbin.rs` (**25 LOLBins / 50 binary+bare patterns** + **19 blocked script extensions**) even when trailing dots or mixed casing are attempted.
-   - Rejects Win32 namespace escapes (`\\?\`, `\\.\`, `\??\`), UNC paths (`\\`), drive-relative paths (`C:foo`), and NTFS Alternate Data Streams (`:`).
-   - Enforces canonical segment-boundary case-insensitive matching inside allowed workspace trees.
-3. **Digest-Bound HITL Approval (`wardline-approval`)**:
-   - Computes `BLAKE3("wardline.approval.v1\0" || canonical_action || "\0" || payload_binding)`.
-   - Stores and consumes tickets in transactional `redb` (`approvals.redb`). Tickets follow `Pending -> Approved -> Consumed` (single-use) or fail closed (`Denied` / `Expired`).
-4. **Three Controlled Dispatch Paths**:
-   - **4A. Process Sandbox Dispatcher**: `build_child_env()` runs `env_clear()` + policy allowlist (rejecting control chars), verifies native `0x8664` PE header via `wardline-core::pe` (secrets stay isolated from child spawn env and are injected strictly by `wardline-egress`), and invokes `wl_spawn_isolated` over C-ABI v1 FFI.
-   - **4B. Reparse-Safe NTFS File Broker (`file_broker.rs`)**: Handles `BrokerFileRead` / `BrokerFileWrite` up to 16 MiB. Calls `verify_no_reparse_from_root()`, opening each path component with `FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS`, failing immediately on `FILE_ATTRIBUTE_REPARSE_POINT` (NTFS junctions / symlinks), verifying final path resolution via `GetFinalPathNameByHandleW(..., VOLUME_NAME_DOS)` remains anchored under `--base-dir`, and consuming a matching `BLAKE3` approval ticket for writes.
-   - **4C. DPAPI Vault & Locked Memory (`wardline-vault`)**: Stores master symmetric key in `vault/vault.key` wrapped via Win32 `CryptProtectData` (optional entropy `b"wardline.vault.master.v1"`), encrypts secret records in `vault/vault.enc` with `ChaCha20Poly1305` (AAD `b"wardline.vault.entry.v1\0" || grant_id`), and holds decrypted secret buffers in `SecretBytes` (`VirtualLock` → `Zeroize` → `VirtualUnlock`).
-5. **Streaming Anti-Exfiltration Scrubber (`scrub.rs`, `#![forbid(unsafe_code)]`)**:
-   - Passes child `stdout`/`stderr` and egress HTTP headers/bodies through `StreamingScrubber`, detecting granted secret bytes across arbitrary chunk split boundaries and replacing them with `[WARDLINE_REDACTED:<grant_id>]`.
-6. **Cryptographic Audit WAL Builder (`wardline-log`)**:
-   - Acquires exclusive blocking lock (`LockFileEx`), serializes `CBOR AuditFrame` records prefixed with `[u32 LE len]` after `WLG1` file header magic, hashes with `BLAKE3("wardline.wlog.v1\0" || prev_hash || frame_cbor)`, periodically signs checkpoints using `Ed25519` (`"wardline.seal.v1\0"`), and calls `FlushFileBuffers()`.
-7. **Response Multiplexer**:
-   - Serializes `GuardResponse::{Ok, ApprovalRequired, Denied, Error}` cleanly back over the Named Pipe.
-
-### Zone 3: Anti-SSRF Egress Router (`wardline-egress`)
-
-Because `L1 AppContainer` children hold **zero network capabilities**, outbound requests route through `GuardEngine::handle_http_fetch()`:
-1. Validates URL scheme, `EgressMode` (`Blocked` / `ProxyOnly` / `DirectAllowed`), `allowed_destinations`, cert `net:` scope, response size budget (`max_bytes_per_request.max(4096)`), and HITL approval if required (e.g., mutating `POST`/`PUT`/`PATCH`/`DELETE`).
-2. `validate_host_name()` blocks `localhost`, `.local`, `.internal`, `metadata.google.internal`, and literal disallowed IPs.
-3. `resolve_and_pin_addresses()` performs DNS lookup **once**, runs `validate_ip_addr()` against every candidate IP (blocking `0.0.0.0/8`, `127.0.0.0/8`, `169.254.0.0/16` IMDS, RFC1918 private blocks, `100.64.0.0/10` CGNAT, `198.18.0.0/15`, multicast, `::ffff:` IPv4-mapped, `fe80::/10`, `fc00::/7`, and IPv6 by default), and pins the `SocketAddr`.
-4. `connect_pinned()` connects directly to the pinned address without a second DNS query (preventing DNS rebinding TOCTOU), establishes TLS via `native-tls` (Windows Schannel), injects the host-bound vault header only if `grant.host` matches cleanly, streams response parsing via `httparse`, and scrubs headers/body via `StreamingScrubber`.
-
-### Zone 4: Zig `x64` Kernel Containment Engine (`wardline_engine_x64`)
-
-Implemented in [`platforms/win-x64/engine_x64.zig`](../platforms/win-x64/engine_x64.zig) + [`platforms/common/sandbox_core.zig`](../platforms/common/sandbox_core.zig), linked statically by `wardline-sandbox`:
-
-#### C-ABI v1 Surface (`wardline_abi.h`)
-
-| Exported Symbol | Signature Summary | Purpose |
-| :--- | :--- | :--- |
-| `wl_engine_abi_version` | `() -> u32` | Returns `WARDLINE_ABI_VERSION` (`1`). |
-| `wl_engine_arch` | `() -> u32` | Returns `WL_ARCH_X64` (`1`). |
-| `wl_probe_capabilities` | `(WlHostCapabilities*) -> u32` | Probes `RtlGetVersion`, `GetNativeSystemInfo`, `IsWow64Process2`, CET (`ProcessUserShadowStackPolicy`), and `computecore.dll` HCS availability. |
-| `wl_classify_pe` | `(const uint8_t*, size_t) -> u32` | Classifies COFF Machine bytes (`0x8664` AMD64, `0x014C` x86, `0xAA64` ARM64, `0xA641` ARM64EC, non-PE script). |
-| `wl_spawn_isolated` | `(const WlSpawnRequest*, WlIoBuffers*, WlSpawnResult*) -> u32` | Verifies `0x8664` PE on disk (`WL_ERR_PE_DISALLOWED_ARCH` on mismatch), constructs Win32 mitigations, executes `executeIsolatedChild`, returns exit code / RSS / CPU time / stdout / stderr. |
-| `wl_create_hardened_pipe` | `(const uint8_t*, size_t, size_t*, uint32_t*) -> u32` | Creates first-instance, remote-rejecting overlapped Named Pipe with protected user+SYSTEM SDDL. |
-| `wl_set_owner_only_dacl_utf8` | `(const uint8_t*, size_t, uint8_t, uint32_t*) -> u32` | Locks files/directories to owner+SYSTEM protected ACLs. |
-| `wl_harden_current_process_dacl` | `(uint32_t*) -> u32` | Protects daemon process DACL via `SetSecurityInfo`. |
-
-#### `x64` Mitigation Policy Matrix (`engine_x64.zig`)
-
-Before `CreateProcessW` launches the child suspended:
-- **`word0` always applied**:
-  - `MITIGATION_DEP_ENABLE`
-  - `MITIGATION_SEHOP_ENABLE`
-  - `MITIGATION_FORCE_RELOCATE_IMAGES_ALWAYS_ON`
-  - `MITIGATION_HEAP_TERMINATE_ALWAYS_ON`
-  - `MITIGATION_BOTTOM_UP_ASLR_ALWAYS_ON`
-  - `MITIGATION_HIGH_ENTROPY_ASLR_ALWAYS_ON`
-  - `MITIGATION_EXTENSION_POINT_DISABLE_ALWAYS_ON`
-  - `MITIGATION_FONT_DISABLE_ALWAYS_ON`
-- **`word0` when `enable_acg != 0`**:
-  - `MITIGATION_PROHIBIT_DYNAMIC_CODE_ALWAYS_ON` (Arbitrary Code Guard)
-- **`word1` when `enable_cet != 0` and `checkCetShadowStackSupported() != 0`**:
-  - `MITIGATION2_CET_USER_SHADOW_STACKS_ALWAYS_ON` (hardware Control-flow Enforcement Technology)
-
-#### Common Isolation Container (`sandbox_core.zig`)
-
-- **`L0` (`WL_ISOLATION_L0_RESTRICTED_JOB`)**: `CreateRestrictedToken(..., DISABLE_MAX_PRIVILEGE)` + `WinLowLabelSid` (`S-1-16-4096`) + `JobObject` + IOCP.
-- **`L1` (`WL_ISOLATION_L1_APPCONTAINER`, default)**: Creates transient AppContainer profile via `CreateAppContainerProfile` (0 network/device capabilities), attaches `SECURITY_CAPABILITIES` via `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`, grants transient scoped FS read/write ACEs, launches child `CREATE_SUSPENDED` with `lpDesktop = ""` and strict `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` (only anonymous pipe handles), assigns to `JobObject` (`KILL_ON_JOB_CLOSE`, active process/memory/CPU/UI limits), pumps IOCP + pipes until exit or wall-clock `timeout_ms`, then **terminates the job tree, revokes transient ACEs, and calls `DeleteAppContainerProfile` in `defer`**.
-- **`L2` (`WL_ISOLATION_L2_MICROVM`)**: Probes `computecore.dll` capability in `wl_probe_capabilities`; fail-closed at spawn (`WL_ERR_NOT_SUPPORTED_ARCH`) while HCS/WHPX guest runner integration is staged.
-
-### Zone 5: Persistent State & Offline Auditor
-
-Directory `.wardline/`:
-- `vault/vault.key` — DPAPI-protected master key blob
-- `vault/vault.enc` — `ChaCha20Poly1305` sealed credentials map
-- `approvals.redb` — Durable ACID ticket & digest store
-- `crl.redb` — Revoked `WardCert` serial UUIDs
-- `audit.wlog` — Binary `WLG1` chained audit log
-
-`wardline-verify.exe` opens `audit.wlog` completely offline without IPC or daemon interaction, verifying the `WLG1` header, sequential `prev_hash` (`BLAKE3`) transitions across every frame, and every `Ed25519` seal checkpoint.
-
----
-
-## 2. Memory-Safety & `unsafe` Audit Boundary
-
-| Crate / Module | Safety Discipline | Role |
-| :--- | :--- | :--- |
-| `wardline-core`, `wardline-policy`, `wardline-cert`, `wardline-approval`, `wardline-egress`, `wardline-mcp`, `wardline-verify`, `wardline-cli` | `#![forbid(unsafe_code)]` | All parsing, cert crypto, policy evaluation, SSRF validation, MCP JSON-RPC, WAL verification. |
-| `wardline-vault/src/scrub.rs`, `wardline-guard/src/{daemon,protocol}.rs` | `#![forbid(unsafe_code)]` | Orchestration loop, wire protocol, cross-chunk redaction. |
-| `wardline-vault/src/{dpapi,acl}.rs`, `wardline-log/src/lock.rs`, `wardline-guard/src/{file_broker,pipe_server}.rs`, `wardline-sandbox/src/lib.rs` | Localized `windows-sys` FFI `unsafe` | `CryptProtectData`, `VirtualLock`, `LockFileEx`, `FILE_FLAG_OPEN_REPARSE_POINT`, `GetFinalPathNameByHandleW`, Named Pipe I/O, C-ABI v1 FFI calls. |
-| `platforms/win-x64/engine_x64.zig`, `platforms/common/sandbox_core.zig` | Zig native Win32 FFI | `CreateProcessW`, `UpdateProcThreadAttribute`, `CreateAppContainerProfile`, JobObjects, IOCP. |
+1. **Untrusted Edge -> Guard**: Frames are length-prefixed `[u32 LE length <= 16 MiB][UTF-8 JSON]`.
+   - Windows uses `\\.\pipe\wardline_guard` (overlapped byte stream pipe, `PIPE_REJECT_REMOTE_CLIENTS`, restricted SDDL).
+   - Unix uses `$WARDLINE_SOCKET` or `$XDG_RUNTIME_DIR/wardline_guard.sock` (`0600`, peer UID verified via `SO_PEERCRED`/`LOCAL_PEERCRED`).
+2. **Guard -> Child Process**: `env_clear()` strips ambient secrets; only allowlisted environment variables and granted `secret` injections are passed into the suspended/forked child; `HANDLE_LIST` (Windows) or `FD` close loop (POSIX) ensures zero leaked file descriptors.
+3. **Child Output / Egress Response -> Caller**: All captured stdout/stderr and HTTP responses stream through `StreamingScrubber` before reaching any client or MCP host.

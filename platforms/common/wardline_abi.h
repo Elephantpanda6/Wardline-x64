@@ -16,6 +16,22 @@ typedef enum WlArch {
     WL_ARCH_ARM64   = 2
 } WlArch;
 
+typedef enum WlOsKind {
+    WL_OS_UNKNOWN    = 0,
+    WL_OS_WINDOWS    = 1,
+    WL_OS_LINUX      = 2,
+    WL_OS_MACOS      = 3,
+    WL_OS_FREEBSD    = 4,
+    WL_OS_OTHER_UNIX = 5
+} WlOsKind;
+
+#define WL_ARM64_FEAT_PAC         0x01u
+#define WL_ARM64_FEAT_BTI         0x02u
+#define WL_ARM64_FEAT_MTE         0x04u
+#define WL_ARM64_FEAT_SVE         0x08u
+#define WL_ARM64_FEAT_SVE2        0x10u
+#define WL_ARM64_FEAT_LARGE_PAGES 0x20u
+
 typedef enum WlIsolationLevel {
     WL_ISOLATION_L0_RESTRICTED_JOB = 0,
     WL_ISOLATION_L1_APPCONTAINER   = 1,
@@ -59,7 +75,8 @@ typedef struct WlHostCapabilities {
     uint8_t  hyperv_hcs_available;
     uint8_t  appcontainer_supported;
     uint8_t  job_object_iocp_supported;
-    uint8_t  reserved[2];
+    uint8_t  os_kind;         /* 1=Windows, 2=Linux, 3=macOS, 4=FreeBSD, 5=OtherUnix */
+    uint8_t  arm64_ext_flags; /* bit0=PAC, bit1=BTI, bit2=MTE, bit3=SVE, bit4=SVE2, bit5=LargePages */
     uint32_t os_build_number;
     uint32_t page_size;
 } WlHostCapabilities;

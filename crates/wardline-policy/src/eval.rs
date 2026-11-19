@@ -1,26 +1,31 @@
 #![forbid(unsafe_code)]
 
+use wardline_core::binary::{validate_binary_policy, BinaryFormat, BinaryInfo};
 use wardline_core::capability::{host_matches_pattern, parse_canonical_destination};
 use wardline_core::lolbin::{classify_executable_name, ExecutableRisk};
 use wardline_core::path::{
-    is_lexical_prefix_match, normalize_windows_lexical_path, validate_safe_windows_path,
+    is_host_prefix_match, normalize_host_lexical_path, validate_safe_host_path,
 };
 use wardline_core::pe::{validate_architecture_policy, PeClass};
-use wardline_core::{ActionRequest, Decision, TargetArch};
+use wardline_core::{ActionRequest, Decision, TargetArch, TargetOs};
 
 use crate::manifest::{CompiledPolicy, DestinationRule, EgressMode};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecContext {
+    pub host_os: TargetOs,
     pub host_arch: TargetArch,
     pub pe_class: PeClass,
+    pub binary_info: Option<BinaryInfo>,
 }
 
 impl Default for ExecContext {
     fn default() -> Self {
         Self {
+            host_os: TargetOs::host(),
             host_arch: TargetArch::host(),
             pe_class: PeClass::NotPe,
+            binary_info: None,
         }
     }
 }
@@ -46,12 +51,12 @@ pub fn evaluate_action(
 }
 
 fn check_denied_fs_prefixes(policy: &CompiledPolicy, raw_path: &str) -> Result<String, Decision> {
-    if let Err(err) = validate_safe_windows_path(raw_path) {
+    if let Err(err) = validate_safe_host_path(raw_path) {
         return Err(Decision::Deny {
             reason: err.to_string(),
         });
     }
-    let norm = match normalize_windows_lexical_path(raw_path) {
+    let norm = match normalize_host_lexical_path(raw_path) {
         Ok(p) => p,
         Err(err) => {
             return Err(Decision::Deny {
@@ -61,11 +66,12 @@ fn check_denied_fs_prefixes(policy: &CompiledPolicy, raw_path: &str) -> Result<S
     };
     let lc = norm.to_ascii_lowercase();
     for denied in &policy.denied_prefixes_raw_lc {
-        let hit = if denied.ends_with('\\') {
+        let sep = if denied.contains('/') { '/' } else { '\\' };
+        let hit = if denied.ends_with(sep) {
             lc.starts_with(denied)
         } else {
-            let d = denied.trim_end_matches('\\');
-            !d.is_empty() && (lc == d || lc.starts_with(&format!("{d}\\")))
+            let d = denied.trim_end_matches(sep);
+            !d.is_empty() && (lc == d || lc.starts_with(&format!("{d}{sep}")))
         };
         if hit {
             return Err(Decision::Deny {
@@ -84,11 +90,11 @@ fn eval_fs_read(policy: &CompiledPolicy, raw_path: &str) -> Decision {
     let in_read = policy
         .read_roots
         .iter()
-        .any(|root| is_lexical_prefix_match(&norm, root));
+        .any(|root| is_host_prefix_match(&norm, root));
     let in_write = policy
         .write_roots
         .iter()
-        .any(|root| is_lexical_prefix_match(&norm, root));
+        .any(|root| is_host_prefix_match(&norm, root));
     if in_read || in_write {
         Decision::Allow
     } else {
@@ -106,7 +112,7 @@ fn eval_fs_write(policy: &CompiledPolicy, raw_path: &str, op: &str) -> Decision 
     let in_write = policy
         .write_roots
         .iter()
-        .any(|root| is_lexical_prefix_match(&norm, root));
+        .any(|root| is_host_prefix_match(&norm, root));
     if !in_write {
         return Decision::Deny {
             reason: format!("{op} path '{norm}' outside workspace_write"),
@@ -142,6 +148,30 @@ fn eval_process_exec(
             };
         }
         _ => {}
+    }
+
+    if let Some(ref info) = ctx.binary_info {
+        if info.format == BinaryFormat::ScriptOrRaw {
+            if policy.manifest.execution.deny_scripts {
+                return Decision::Deny {
+                    reason: "non-executable script or raw file execution denied".to_string(),
+                };
+            }
+            return Decision::Allow;
+        }
+        let arch_eval = validate_binary_policy(
+            info,
+            ctx.host_os,
+            ctx.host_arch,
+            policy.manifest.architecture.mode,
+        );
+        return if arch_eval.allowed {
+            Decision::Allow
+        } else {
+            Decision::Deny {
+                reason: arch_eval.reason,
+            }
+        };
     }
 
     if ctx.pe_class == PeClass::NotPe {
@@ -329,8 +359,10 @@ require_on_network_post = true
     fn enforces_arm64_prism_and_lolbin_policies() {
         let strict_arm = sample_policy("strict_native");
         let x64_on_arm = ExecContext {
+            host_os: TargetOs::Windows,
             host_arch: TargetArch::Arm64,
             pe_class: PeClass::Amd64,
+            binary_info: None,
         };
         assert!(matches!(
             evaluate_action(
@@ -339,7 +371,7 @@ require_on_network_post = true
                     executable: r"C:\Tools\tool.exe".into(),
                     args: vec![]
                 },
-                Some(x64_on_arm)
+                Some(x64_on_arm.clone())
             ),
             Decision::Deny { .. }
         ));
@@ -366,8 +398,10 @@ require_on_network_post = true
                     args: vec![]
                 },
                 Some(ExecContext {
+                    host_os: TargetOs::Windows,
                     host_arch: TargetArch::Arm64,
                     pe_class: PeClass::Arm64,
+                    binary_info: None,
                 })
             ),
             Decision::Deny { .. }

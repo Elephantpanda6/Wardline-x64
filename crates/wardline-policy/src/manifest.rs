@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use wardline_core::capability::parse_canonical_destination;
-use wardline_core::path::normalize_windows_lexical_path;
+use wardline_core::path::{looks_like_windows_path, normalize_host_lexical_path};
 use wardline_core::{ArchExecutionMode, IsolationLevel};
 
 use crate::PolicyError;
@@ -239,14 +239,14 @@ impl CompiledPolicy {
 
         let mut read_roots = Vec::with_capacity(manifest.filesystem.workspace_read.len());
         for raw in &manifest.filesystem.workspace_read {
-            let norm = normalize_windows_lexical_path(raw)
+            let norm = normalize_host_lexical_path(raw)
                 .map_err(|e| PolicyError::Validation(format!("workspace_read '{raw}': {e}")))?;
             read_roots.push(norm);
         }
 
         let mut write_roots = Vec::with_capacity(manifest.filesystem.workspace_write.len());
         for raw in &manifest.filesystem.workspace_write {
-            let norm = normalize_windows_lexical_path(raw)
+            let norm = normalize_host_lexical_path(raw)
                 .map_err(|e| PolicyError::Validation(format!("workspace_write '{raw}': {e}")))?;
             write_roots.push(norm);
         }
@@ -256,8 +256,14 @@ impl CompiledPolicy {
             .denied_prefixes
             .iter()
             .map(|p| {
-                normalize_windows_lexical_path(p)
-                    .unwrap_or_else(|_| p.replace('/', "\\"))
+                normalize_host_lexical_path(p)
+                    .unwrap_or_else(|_| {
+                        if cfg!(windows) || looks_like_windows_path(p) {
+                            p.replace('/', "\\")
+                        } else {
+                            p.replace('\\', "/")
+                        }
+                    })
                     .to_ascii_lowercase()
             })
             .collect();

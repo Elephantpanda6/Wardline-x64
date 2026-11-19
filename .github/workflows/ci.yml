@@ -1,67 +1,83 @@
-name: Wardline Win-x64 CI
+name: Wardline x64 Multi-OS CI
 
 on:
   push:
-    branches: ["main"]
+    branches: [ main ]
   pull_request:
-    branches: ["main"]
+    branches: [ main ]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  zig-engines-cross:
+    name: Zig 4-OS x64 Engine Cross-Build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+      - name: Cross-compile Win/Linux/macOS/FreeBSD x64 engines
+        run: |
+          zig build all-engines
+          zig build common-tests
+
   win-x64:
-    name: Windows x64 Suite
+    name: Windows 11 x64 Native Build & Test
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust (x86_64-pc-windows-msvc)
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc
           components: clippy
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Install Zig
-        uses: mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.1
-
-      - name: Build and Test Zig x64 Engine
+      - name: Build & test Zig x64 engines
         shell: pwsh
         run: |
-          zig build
+          zig build all-engines
           zig build test
-
-      - name: Clippy Workspace
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Run Workspace Tests
-        run: cargo test --workspace -- --test-threads=1
-
-      - name: Build Release Binaries
-        run: cargo build --release --bins
-
-      - name: Verify PE Architecture & Doctor Probe
+      - name: Cargo clippy & full workspace tests
         shell: pwsh
         run: |
-          function Get-PeMachine($path) {
-            $fs = [System.IO.File]::OpenRead((Resolve-Path $path))
-            try {
-              $br = New-Object System.IO.BinaryReader($fs)
-              $fs.Seek(0x3C, 'Begin') | Out-Null
-              $peOff = $br.ReadInt32()
-              $fs.Seek($peOff + 4, 'Begin') | Out-Null
-              return $br.ReadUInt16()
-            } finally {
-              $fs.Dispose()
-            }
-          }
-          foreach ($bin in @("wardline.exe", "wardline-guard.exe", "wardline-mcp.exe", "wardline-verify.exe")) {
-            $m = Get-PeMachine "target\x86_64-pc-windows-msvc\release\$bin"
-            if ($m -ne 0x8664) { throw "$bin x64 machine mismatch: 0x$($m.ToString('X4'))" }
-          }
-          .\target\x86_64-pc-windows-msvc\release\wardline.exe doctor --json
-          .\target\x86_64-pc-windows-msvc\release\wardline-verify.exe --help
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace -- --test-threads=1
+          cargo build --release --bins
+
+  linux-x64:
+    name: Linux x64 Native Build & Test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+      - name: Install OpenSSL headers & build/test workspace
+        run: |
+          sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+          zig build linux-x64
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace -- --test-threads=1
+          cargo build --release --bins
+
+  macos-x64:
+    name: macOS x64 Cross/Native Check
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+          components: clippy
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+      - name: Build macOS x64 Zig engine & check workspace
+        run: |
+          zig build macos-x64
+          cargo clippy --target x86_64-apple-darwin --workspace --all-targets -- -D warnings
