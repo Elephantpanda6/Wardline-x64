@@ -78,5 +78,12 @@ All tests, lints, release builds, polyglot SDK checks, and benchmarks below refl
 | **TypeScript SDK** (`clients/ts`) | **1/1 passed** (`node v24.18.1 --experimental-strip-types --test`) | **1/1 passed** (`node v24.18.1 --experimental-strip-types --test`) | Verified direct TypeScript test execution on Node `v24.18.1` on both Windows and Linux |
 | **Rust SDK** (`clients/rust/wardline-client`) | **1/1 passed** (`cargo test --offline`) | **1/1 passed** (`cargo test --offline`) | `#![forbid(unsafe_code)]`; verified IPC framing & typed error handling |
 | **Go SDK** (`clients/go/wardline`) | **1/1 passed** (`go1.27.4 windows/amd64`) | **1/1 passed** (`go1.26.8 linux/amd64`) | `TestIPCFrameAndCheckedResponse` passed; included in `scripts/test-results.ps1` (`ALL VERIFICATION SUITES PASSED`) & `.sh` |
-| **macOS & FreeBSD Runtime** | Cross-compiled Zig `.a` libraries only | Cross-compiled Zig `.a` libraries only | `macos-x64` Seatbelt & `freebsd-x64` Capsicum C engines compiled via `zig build all-engines`; live kernel tests require native Darwin / FreeBSD hosts |
+| **macOS & FreeBSD Runtime** | Cross-compiled Zig `.a` libraries only locally | Cross-compiled Zig `.a` libraries only locally | macOS native Seatbelt, `live_sandbox`, `invariants_i1_i7`, and `clippy` verified green via GitHub Actions (`macos-latest`); FreeBSD live tests require a native FreeBSD host |
 | **Fuzz Targets** (`fuzz/`) | Compiled/checked structure (`libfuzzer-sys`) | Not run locally (`cargo-fuzz` nightly fuzzer not invoked) | 7 libFuzzer harnesses + seed corpora staged in `fuzz/` |
+
+---
+
+## 4. Multi-OS GitHub Actions CI & Supply-Chain Verification
+
+- **Supply-Chain Audit (`supply-chain`: `cargo-deny` + `rustsec/audit-check`)**: **Passed** (`advisories ok`, `bans ok`, `licenses ok`, `sources ok`).
+- **Native Runner Matrices (`Multi-OS CI` & `Security Scan`)**: **Passed** across `windows-latest` (`win-x64`), `ubuntu-24.04` / `ubuntu-latest` (`linux-x64`), `macos-latest` (`clippy`, full workspace tests, `live_sandbox` Seatbelt SBPL, and `invariants_i1_i7`), and `Zig 4-OS x64 Engine Cross-Build`.
