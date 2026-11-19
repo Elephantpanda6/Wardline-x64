@@ -1,27 +1,22 @@
-# Security Policy (`wardline-x64`)
+# Security Policy (`Wardline-x64`)
 
-## Supported Versions
+## Supported Targets & Isolation Tiers
 
-Wardline tracks active development on the `0.1.x` release line targeting **Windows 10 / 11 (`x86_64-pc-windows-msvc`)**.
+| Target Platform | Architecture | Zig `C-ABI v2` Engine | Isolation Tiers | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| Windows x64 (`win-x64`) | `x86_64` (`PE 0x8664` + CET) | `engine_windows` | `L0`, `L1`, `L2` (`HCS`) | Supported |
+| Linux x64 (`linux-x64`) | `x86_64` | `engine_linux` | `L0`, `L1` (UserNS/Landlock/Seccomp), `L1.5` (`gVisor`), `L2` (`Firecracker`) | Supported |
+| macOS x64 (`macos-x64`) | `x86_64` | `engine_macos` | `L0`, `L1` (Seatbelt), `L2` (`VZ`) | Supported |
+| FreeBSD x64 (`freebsd-x64`) | `amd64` | `engine_freebsd` | `L0`, `L1` (`Capsicum` + `procdesc` + `rctl`) | Supported |
 
-| Version | Target Architecture | Supported |
-| :--- | :--- | :--- |
-| `0.1.x` | Windows x64 (`0x8664`) | Yes (active) |
-
-## Security Boundaries in Scope
-
-Please report vulnerabilities affecting any of the following boundaries:
-- **Sandbox Escape (`L0` / `L1`)**: Breakout from `AppContainer`, `JobObject`, restricted token integrity (`WinLowLabelSid`), handle inheritance leaks, or desktop isolation bypasses.
-- **Host NTFS Broker Escape**: Any symlink/junction/hardlink/ADS/canonical-path bypass allowing read or write outside `[filesystem]` allowlists or bypassing `approvals.redb` write digest checks.
-- **Secret Custody & Exfiltration**: Plaintext recovery of `.wardline/vault/vault.enc` without host DPAPI user credentials, leaked `SecretBytes` in child environments, or bypasses of `StreamingScrubber`.
-- **SSRF / DNS Rebinding**: Bypass of `ssrf.rs` / `connect_pinned` reaching loopback, RFC1918, `169.254.0.0/16` IMDS, or disallowed IPv6 endpoints.
-- **IPC Squatting or Auth Bypass**: Bypass of `FILE_FLAG_FIRST_PIPE_INSTANCE`, Named Pipe SDDL `D:P(A;OICI;GA;;;{UserSID})(A;OICI;GA;;;SY)`, `WardCert` Ed25519 signature verification, monotonic attenuation, or `WLG1` audit chaining.
-
-## Out of Scope
-
-- Attacks requiring pre-existing local Windows Administrator / `SYSTEM` (`SeDebugPrivilege`) privileges.
-- `L2 MicroVM` execution (currently intentionally **fails closed** with `WL_ERR_NOT_SUPPORTED_ARCH`).
+## Core Security Guarantees
+- **Control Plane Safety**: 12 workspace crates plus `wardline-client` enforce `#![forbid(unsafe_code)]`; OS FFI is isolated in `wardline-platform` and Zig `C-ABI v2` in `wardline-sandbox`.
+- **Fail-Closed Execution & Ceiling Rules**: `[operator_forbid]` rules cannot be relaxed by user policies, 8-depth `argv_shield` inspects wrapped shells/interpreters, and requested `L0`–`L2` isolation tiers fail closed if unavailable.
+- **Delegation & Revocation**: `WardCert` Ed25519 capability chains (`MAX_CHAIN_DEPTH = 8`) support cascading subtree CRL revocation.
+- **Vault & Egress Protection**: Secrets are host-sealed (`DPAPI` / host keyring + `--value-file` + `rotate_master_key()`) and never exposed raw inside sandboxed child environments; egress traffic enforces pinned anti-SSRF DNS and `redb`-persisted quotas.
+- **Tamper-Evident Audit**: `WLG1` audit logs combine `BLAKE3` Merkle inclusion proofs, Ed25519 checkpoints, and `.tainted` panic freeze protection.
 
 ## Reporting a Vulnerability
+Please report suspected vulnerabilities responsibly via **GitHub Private Vulnerability Reporting** (`Security` tab -> `Report a vulnerability`). Do **not** file public issues for unpatched privilege escalations, sandbox escapes, secret leaks, DNS rebinding / SSRF bypasses, or audit log forgery.
 
-Please **do not open public GitHub issues** for unpatched security vulnerabilities. Report findings privately via GitHub Security Advisories on [`Elephantpanda6/wardline-x64`](https://github.com/Elephantpanda6/wardline-x64) with minimal reproduction steps, Windows build number (`wardline.exe doctor --json`), and target PE binary characteristics.
+We acknowledge vulnerability reports within **48 hours** and provide an initial remediation timeline once reproduced.

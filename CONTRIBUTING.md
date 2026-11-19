@@ -1,28 +1,46 @@
-# Contributing to Wardline (`win-x64`)
+# Contributing to Wardline (Multi-OS `x86_64`)
 
-Thank you for helping strengthen clean-room agent sandboxing on Windows!
+Contributions to **Wardline (Multi-OS x64)** are welcome. Please observe the architecture and safety invariants below before opening a pull request.
 
-## Design & Coding Rules
+## Safety & Code Architecture Rules
+- **12 `#![forbid(unsafe_code)]` Core & Feature Crates**: `wardline-core`, `wardline-policy`, `wardline-secrets`, `wardline-audit`, `wardline-fs`, `wardline-egress`, `wardline-auth`, `wardline-attest`, `wardline-mcp`, `wardline-cli`, `wardline-guest-agent`, plus standalone **`wardline-client`** MUST retain `#![forbid(unsafe_code)]`.
+- **FFI Quarantine**:
+  - OS-specific Rust FFI belongs strictly inside **`crates/wardline-platform`** (behind audited safe wrappers).
+  - Cross-OS sandbox kernel primitives belong in **`platforms/{common,windows,linux,macos,freebsd}`** (Zig `C-ABI v2`) and **`crates/wardline-sandbox`**.
+- **Clean-Room Standard**: Never introduce opaque binary blobs, unpinned external test fixtures, or undocumented bypass switches (`L0`–`L2` must fail closed when a requested tier cannot be provisioned).
+- **Architecture Targets**: Verify that `x86_64` ABI assumptions remain portable across `win-x64`, `linux-x64`, `macos-x64`, and `freebsd-x64`.
 
-1. **Preserve `#![forbid(unsafe_code)]`**: Never remove `#![forbid(unsafe_code)]` from `wardline-core`, `wardline-policy`, `wardline-cert`, `wardline-approval`, `wardline-egress`, `wardline-mcp`, `wardline-verify`, `wardline-cli`, `wardline-vault/src/scrub.rs`, or `wardline-guard/src/{daemon,protocol}.rs`.
-2. **Isolate Win32 FFI**: OS process creation, token/AppContainer setup, and exploit mitigations belong strictly in Zig (`platforms/common/`, `platforms/win-x64/`) exposed via C-ABI v1 in `platforms/common/wardline_abi.h`.
-3. **Fail Closed Always**: Ambiguous paths, invalid PE headers, unparseable DNS results, expired tickets, missing certificates (under `--require-cert`), and unimplemented tiers (`L2`) must return explicit denials—never silent fallbacks.
+## Local Build & Verification
 
-## Local Pre-PR Verification Checklist
-
-Run all checks cleanly before opening a PR:
-
-```powershell
-zig build
-zig build test
-cargo fmt --all -- --check
+### 1. Rust Workspace & Fuzzing
+```bash
+cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace -- --test-threads=1
-cargo build --release --bins
+cargo check --manifest-path sdk/rust/Cargo.toml
 ```
 
-Verify documentation links remain valid whenever updating `README.md` or `docs/*.md`, and re-run `wardline.exe doctor --json` after modifying `wardline_abi.h` or `engine_x64.zig`.
+### 2. Zig `C-ABI v2` Multi-OS Sandbox Engines
+```bash
+zig build all-engines
+zig build common-tests
+zig build test
+```
 
-## Licensing
+### 3. Multi-OS SDKs (`Rust`, `Python`, `TypeScript`, `Go`)
+```bash
+# Rust SDK
+cargo test --manifest-path sdk/rust/Cargo.toml
 
-All contributions are dual-licensed under **MIT OR Apache-2.0** ([LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE)).
+# Python SDK
+python -m pytest sdk/python
+
+# TypeScript SDK
+npm test --prefix sdk/typescript
+
+# Go SDK
+go test ./...   # run inside sdk/go
+```
+
+### 4. End-to-End Verification Scripts & Supply Chain Checks
+- Run `./scripts/test-results.sh` (Linux/macOS/FreeBSD) or `powershell -File scripts/test-results.ps1` (Windows).
+- Before submitting, ensure `cargo deny check` passes and no plaintext secrets or hardcoded credentials exist in your changes.

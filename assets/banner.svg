@@ -1,32 +1,58 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 260" width="1200" height="260">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 240" width="1200" height="240" role="img" aria-label="Wardline Multi-OS x64 Banner">
   <defs>
-    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#E2E8F0" stroke-width="0.8"/>
-    </pattern>
-    
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B1120"/>
+      <stop offset="55%" stop-color="#111C33"/>
+      <stop offset="100%" stop-color="#0F172A"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="50%" stop-color="#60A5FA"/>
+      <stop offset="100%" stop-color="#34D399"/>
+    </linearGradient>
+    <linearGradient id="shield" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#2563EB"/>
+    </linearGradient>
   </defs>
-  <rect x="0" y="0" width="1200" height="260" fill="#F8FAFC"/>
-  <rect x="0" y="0" width="1200" height="260" fill="url(#grid)" opacity="0.45"/>
-  <rect x="0" y="0" width="1200" height="260" rx="16" fill="#0F172A" stroke="#1E293B" stroke-width="2"/>
-  <rect x="0" y="0" width="14" height="260" rx="4" fill="#38BDF8" stroke="none" stroke-width="2"/>
-  <rect x="940" y="36" width="26" height="188" rx="6" fill="#1E293B" stroke="#334155" stroke-width="1"/>
-  <rect x="978" y="54" width="26" height="152" rx="6" fill="#1E293B" stroke="#334155" stroke-width="1"/>
-  <rect x="1016" y="36" width="26" height="188" rx="6" fill="#1E293B" stroke="#334155" stroke-width="1"/>
-  <rect x="1054" y="54" width="26" height="152" rx="6" fill="#1E293B" stroke="#334155" stroke-width="1"/>
-  <rect x="1092" y="36" width="26" height="188" rx="6" fill="#1E293B" stroke="#334155" stroke-width="1"/>
-  <rect x="1130" y="54" width="26" height="152" rx="6" fill="#1E293B" stroke="#334155" stroke-width="1"/>
-  <text x="56" y="62" font-size="15" font-weight="700" fill="#38BDF8" text-anchor="start" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">ELEPHANTPANDA6 / WARDLINE-X64</text>
-  <text x="54" y="122" font-size="46" font-weight="800" fill="#FFFFFF" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Wardline (Windows x64)</text>
-  <text x="56" y="164" font-size="18" font-weight="500" fill="#CBD5E1" text-anchor="start" font-family="'Segoe UI', 'Inter', Arial, sans-serif">Zero-Trust Agent Execution Sandbox, Brokered NTFS Access &amp; SSRF-Pinned Egress for Windows</text>
-  <rect x="56" y="192" width="256.2" height="36" rx="8" fill="#1E293B" stroke="#475569" stroke-width="1.4"/>
-  <text x="184.1" y="215" font-size="13" font-weight="700" fill="#E2E8F0" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Rust x86_64-pc-windows-msvc</text>
-  <rect x="324.2" y="192" width="221.79999999999998" height="36" rx="8" fill="#1E293B" stroke="#475569" stroke-width="1.4"/>
-  <text x="435.09999999999997" y="215" font-size="13" font-weight="700" fill="#E2E8F0" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">Zig 0.17.1 (engine_x64)</text>
-  <rect x="558.0" y="192" width="153.0" height="36" rx="8" fill="#1E293B" stroke="#475569" stroke-width="1.4"/>
-  <text x="634.5" y="215" font-size="13" font-weight="700" fill="#E2E8F0" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">PE 0x8664 + CET</text>
-  <rect x="723.0" y="192" width="196.0" height="36" rx="8" fill="#1E293B" stroke="#475569" stroke-width="1.4"/>
-  <text x="821.0" y="215" font-size="13" font-weight="700" fill="#E2E8F0" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">AppContainer + DPAPI</text>
-  <rect x="931.0" y="192" width="170.2" height="36" rx="8" fill="#1E293B" stroke="#475569" stroke-width="1.4"/>
-  <text x="1016.1" y="215" font-size="13" font-weight="700" fill="#E2E8F0" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', 'Courier New', monospace">MIT OR Apache-2.0</text>
+
+  <rect width="1200" height="240" rx="16" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1200" height="4" fill="url(#accent)"/>
+  <g stroke="#1E293B" stroke-width="1" opacity="0.45">
+    <line x1="0" y1="60" x2="1200" y2="60"/>
+    <line x1="0" y1="120" x2="1200" y2="120"/>
+    <line x1="0" y1="180" x2="1200" y2="180"/>
+    <line x1="200" y1="0" x2="200" y2="240"/>
+    <line x1="1000" y1="0" x2="1000" y2="240"/>
+  </g>
+
+  <!-- Emblem -->
+  <g transform="translate(52, 52)">
+    <path d="M56 4 L104 22 V66 C104 98 82 122 56 132 C30 122 8 98 8 66 V22 Z" fill="#0F172A" stroke="url(#shield)" stroke-width="4"/>
+    <path d="M56 18 L90 31 V64 C90 88 74 107 56 116 C38 107 22 88 22 64 V31 Z" fill="url(#shield)" opacity="0.18"/>
+    <path d="M36 66 L50 80 L78 48" fill="none" stroke="#34D399" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- Title & Subtitle -->
+  <text x="188" y="96" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="40" font-weight="700" fill="#F8FAFC" letter-spacing="-0.5">
+    Wardline <tspan fill="#38BDF8">(Multi-OS x64)</tspan>
+  </text>
+  <text x="188" y="132" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="16" fill="#94A3B8">
+    Zero-Trust Capability Broker, Host-Sealed Vault, Anti-SSRF Egress &amp; Kernel Sandbox (Win / Linux / macOS / FreeBSD)
+  </text>
+
+  <!-- Badges Row -->
+  <g font-family="Consolas, 'Cascadia Code', monospace" font-size="13.5" font-weight="600">
+    <rect x="188" y="160" width="246" height="34" rx="7" fill="#1E293B" stroke="#38BDF8" stroke-opacity="0.5"/>
+    <text x="311" y="182" text-anchor="middle" fill="#E0F2FE">14 Crates (12+1 forbid(unsafe))</text>
+
+    <rect x="448" y="160" width="234" height="34" rx="7" fill="#1E293B" stroke="#34D399" stroke-opacity="0.5"/>
+    <text x="565" y="182" text-anchor="middle" fill="#D1FAE5">Zig C-ABI v2 (4 OS Engines)</text>
+
+    <rect x="696" y="160" width="224" height="34" rx="7" fill="#1E293B" stroke="#60A5FA" stroke-opacity="0.5"/>
+    <text x="808" y="182" text-anchor="middle" fill="#DBEAFE">L0 - L2 + CET / Landlock</text>
+
+    <rect x="934" y="160" width="214" height="34" rx="7" fill="#1E293B" stroke="#A78BFA" stroke-opacity="0.5"/>
+    <text x="1041" y="182" text-anchor="middle" fill="#EDE9FE">Ed25519 + BLAKE3 Merkle</text>
+  </g>
 </svg>
