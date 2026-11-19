@@ -3,6 +3,7 @@ name = "wardline-sandbox"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description.workspace = true
 
 [[test]]
 name = "live_sandbox"

@@ -21,20 +21,21 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+description = "Multi-OS zero-trust capability broker, host-sealed secret vault, anti-SSRF egress proxy, kernel process sandbox, and Merkle audit runtime for x86_64"
 
 [workspace.dependencies]
-wardline-core = { path = "crates/wardline-core" }
-wardline-platform = { path = "crates/wardline-platform" }
-wardline-policy = { path = "crates/wardline-policy" }
-wardline-cert = { path = "crates/wardline-cert" }
-wardline-approval = { path = "crates/wardline-approval" }
-wardline-log = { path = "crates/wardline-log" }
-wardline-verify = { path = "crates/wardline-verify" }
-wardline-vault = { path = "crates/wardline-vault" }
-wardline-egress = { path = "crates/wardline-egress" }
-wardline-sandbox = { path = "crates/wardline-sandbox" }
-wardline-guard = { path = "crates/wardline-guard" }
-wardline-mcp = { path = "crates/wardline-mcp" }
+wardline-core = { version = "0.1.0", path = "crates/wardline-core" }
+wardline-platform = { version = "0.1.0", path = "crates/wardline-platform" }
+wardline-policy = { version = "0.1.0", path = "crates/wardline-policy" }
+wardline-cert = { version = "0.1.0", path = "crates/wardline-cert" }
+wardline-approval = { version = "0.1.0", path = "crates/wardline-approval" }
+wardline-log = { version = "0.1.0", path = "crates/wardline-log" }
+wardline-verify = { version = "0.1.0", path = "crates/wardline-verify" }
+wardline-vault = { version = "0.1.0", path = "crates/wardline-vault" }
+wardline-egress = { version = "0.1.0", path = "crates/wardline-egress" }
+wardline-sandbox = { version = "0.1.0", path = "crates/wardline-sandbox" }
+wardline-guard = { version = "0.1.0", path = "crates/wardline-guard" }
+wardline-mcp = { version = "0.1.0", path = "crates/wardline-mcp" }
 
 anyhow = "1"
 thiserror = "2"

@@ -32,11 +32,6 @@ fn makeEngineLib(
     engine_mod.link_libc = true;
     engine_mod.addImport("common", common_mod);
     engine_mod.addIncludePath(b.path("platforms/common"));
-    if (spec.query.os_tag == .windows) {
-        engine_mod.linkSystemLibrary("kernel32", .{});
-        engine_mod.linkSystemLibrary("advapi32", .{});
-        engine_mod.linkSystemLibrary("userenv", .{});
-    }
 
     const lib = b.addLibrary(.{
         .linkage = .static,
@@ -55,7 +50,7 @@ pub fn build(b: *std.Build) void {
             .subdir = "win-x64",
             .lib_name = "wardline_engine_x64",
             .source = "platforms/win-x64/engine_x64.zig",
-            .query = .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .msvc },
+            .query = .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .gnu },
         },
         .{
             .step_name = "linux-x64",

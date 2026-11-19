@@ -37,8 +37,10 @@ fn parseDarwinRelease() u32 {
     return maj * 10000 + min * 100 + pat;
 }
 
-fn appendSbplEscaped(list: *std.ArrayList(u8), path: []const u8) !void {
-    try list.appendSlice(px.alloc, "(subpath \"");
+fn appendSbplExprEscaped(list: *std.ArrayList(u8), filter: []const u8, path: []const u8) !void {
+    try list.append(px.alloc, '(');
+    try list.appendSlice(px.alloc, filter);
+    try list.appendSlice(px.alloc, " \"");
     for (path) |ch| {
         if (ch == '"' or ch == '\\') {
             try list.append(px.alloc, '\\');
@@ -46,6 +48,41 @@ fn appendSbplEscaped(list: *std.ArrayList(u8), path: []const u8) !void {
         try list.append(px.alloc, ch);
     }
     try list.appendSlice(px.alloc, "\")");
+}
+
+fn appendSbplWithPrivateAliases(list: *std.ArrayList(u8), filter: []const u8, path: []const u8) !void {
+    try list.appendSlice(px.alloc, "  ");
+    try appendSbplExprEscaped(list, filter, path);
+    try list.append(px.alloc, '\n');
+
+    if (std.mem.startsWith(u8, path, "/var/") or
+        std.mem.startsWith(u8, path, "/tmp/") or
+        std.mem.startsWith(u8, path, "/etc/"))
+    {
+        var tmp_buf: [1024]u8 = undefined;
+        if (path.len + 8 <= tmp_buf.len) {
+            @memcpy(tmp_buf[0..8], "/private");
+            @memcpy(tmp_buf[8 .. 8 + path.len], path);
+            try list.appendSlice(px.alloc, "  ");
+            try appendSbplExprEscaped(list, filter, tmp_buf[0 .. 8 + path.len]);
+            try list.append(px.alloc, '\n');
+        }
+    } else if (std.mem.startsWith(u8, path, "/private/var/") or
+        std.mem.startsWith(u8, path, "/private/tmp/") or
+        std.mem.startsWith(u8, path, "/private/etc/"))
+    {
+        try list.appendSlice(px.alloc, "  ");
+        try appendSbplExprEscaped(list, filter, path[8..]);
+        try list.append(px.alloc, '\n');
+    }
+}
+
+fn appendSbplSubpathWithAliases(list: *std.ArrayList(u8), path: []const u8) !void {
+    try appendSbplWithPrivateAliases(list, "subpath", path);
+}
+
+fn appendSbplLiteralWithAliases(list: *std.ArrayList(u8), path: []const u8) !void {
+    try appendSbplWithPrivateAliases(list, "literal", path);
 }
 
 fn buildSeatbeltProfile(
@@ -58,58 +95,50 @@ fn buildSeatbeltProfile(
     errdefer buf.deinit(px.alloc);
 
     if (single_process) {
-        try buf.appendSlice(px.alloc, "(version 1)\n(deny default)\n(deny network*)\n(deny process-fork)\n(allow process-exec*)\n(allow sysctl-read)\n(allow mach-lookup (global-name \"com.apple.system.logger\"))\n(allow file-read-metadata)\n");
+        try buf.appendSlice(px.alloc, "(version 1)\n(allow default)\n(deny network*)\n(deny process-fork)\n");
     } else {
-        try buf.appendSlice(px.alloc, "(version 1)\n(deny default)\n(deny network*)\n(allow process-exec*)\n(allow process-fork)\n(allow sysctl-read)\n(allow mach-lookup)\n(allow file-read-metadata)\n");
+        try buf.appendSlice(px.alloc, "(version 1)\n(allow default)\n(deny network*)\n");
     }
-    try buf.appendSlice(px.alloc, "(allow file-read*\n");
+
+    try buf.appendSlice(px.alloc, "(deny file-read-data)\n(allow file-read-data\n  (literal \"/\")\n");
     const sys_ro = [_][]const u8{
         "/System",
-        "/usr/lib",
-        "/usr/bin",
+        "/usr",
         "/bin",
-        "/Library/Preferences",
+        "/sbin",
+        "/Library",
+        "/AppleInternal",
         "/dev",
-        "/private/var/db/dyld",
+        "/etc",
+        "/private/etc",
+        "/private/var/db",
+        "/var/db",
     };
     for (sys_ro) |p| {
-        try buf.appendSlice(px.alloc, "  ");
-        try appendSbplEscaped(&buf, p);
-        try buf.append(px.alloc, '\n');
+        try appendSbplSubpathWithAliases(&buf, p);
     }
-    try buf.appendSlice(px.alloc, "  (literal \"");
-    for (exe_slice) |ch| {
-        if (ch == '"' or ch == '\\') try buf.append(px.alloc, '\\');
-        try buf.append(px.alloc, ch);
-    }
-    try buf.appendSlice(px.alloc, "\")\n");
+    try appendSbplLiteralWithAliases(&buf, exe_slice);
 
     var ro_it = std.mem.splitScalar(u8, ro_raw, '\n');
     while (ro_it.next()) |line| {
         const p = std.mem.trim(u8, line, "\r \t");
         if (p.len == 0) continue;
-        try buf.appendSlice(px.alloc, "  ");
-        try appendSbplEscaped(&buf, p);
-        try buf.append(px.alloc, '\n');
+        try appendSbplSubpathWithAliases(&buf, p);
     }
     var rw_ro_it = std.mem.splitScalar(u8, rw_raw, '\n');
     while (rw_ro_it.next()) |line| {
         const p = std.mem.trim(u8, line, "\r \t");
         if (p.len == 0) continue;
-        try buf.appendSlice(px.alloc, "  ");
-        try appendSbplEscaped(&buf, p);
-        try buf.append(px.alloc, '\n');
+        try appendSbplSubpathWithAliases(&buf, p);
     }
     try buf.appendSlice(px.alloc, ")\n");
 
-    try buf.appendSlice(px.alloc, "(allow file-write*\n  (literal \"/dev/null\")\n");
+    try buf.appendSlice(px.alloc, "(deny file-write*)\n(allow file-write*\n  (literal \"/dev/null\")\n");
     var rw_it = std.mem.splitScalar(u8, rw_raw, '\n');
     while (rw_it.next()) |line| {
         const p = std.mem.trim(u8, line, "\r \t");
         if (p.len == 0) continue;
-        try buf.appendSlice(px.alloc, "  ");
-        try appendSbplEscaped(&buf, p);
-        try buf.append(px.alloc, '\n');
+        try appendSbplSubpathWithAliases(&buf, p);
     }
     try buf.appendSlice(px.alloc, ")\n");
     try buf.append(px.alloc, 0);

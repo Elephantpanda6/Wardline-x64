@@ -532,7 +532,7 @@ pub fn executePosixIsolated(
     var out_closed = false;
     var err_closed = false;
     var exec_closed = false;
-    var err_pkt_bytes: [@sizeOf(ChildErrPacket)]u8 = undefined;
+    var err_pkt_bytes: [@sizeOf(ChildErrPacket)]u8 align(@alignOf(ChildErrPacket)) = undefined;
     var err_pkt_len: usize = 0;
 
     while (!out_closed or !err_closed or !exec_closed) {
@@ -671,6 +671,9 @@ pub fn executePosixIsolated(
         if (sig == .ABRT or sig == .SEGV or sig == .KILL) {
             res.oom_killed = 1;
         }
+    }
+    if (req.max_memory_bytes > 0 and res.peak_memory_bytes > req.max_memory_bytes) {
+        res.oom_killed = 1;
     }
 
     common.writeDetail(io, res, "completed inside POSIX isolation boundary");

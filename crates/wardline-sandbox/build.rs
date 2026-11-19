@@ -81,7 +81,7 @@ fn main() {
         &[&str],
     ) = match (target_os.as_str(), target_arch.as_str(), target_env.as_str()) {
         ("windows", "aarch64", "msvc") => (
-            "aarch64-windows-msvc",
+            "aarch64-windows-gnu",
             "win-arm64/engine_arm64.zig",
             "wardline_engine_arm64",
             "wardline_engine_arm64.lib",
@@ -95,7 +95,11 @@ fn main() {
             &["advapi32", "userenv", "kernel32"],
         ),
         ("windows", "x86_64", "msvc") => (
-            "x86_64-windows-msvc",
+            if cfg!(windows) {
+                "x86_64-windows-msvc"
+            } else {
+                "x86_64-windows-gnu"
+            },
             "win-x64/engine_x64.zig",
             "wardline_engine_x64",
             "wardline_engine_x64.lib",
@@ -205,7 +209,17 @@ fn main() {
                 "--cache-dir",
             ])
             .arg(&cache_dir)
-            .args(["--dep", "common", &root_arg, &common_arg, &emit_arg])
+            .args([
+                "--dep",
+                "common",
+                &root_arg,
+                "-target",
+                zig_target,
+                opt_flag,
+                "-lc",
+                &common_arg,
+                &emit_arg,
+            ])
             .status()
             .expect("failed to execute zig build-lib");
 

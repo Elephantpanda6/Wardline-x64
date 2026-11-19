@@ -3,6 +3,7 @@ name = "wardline-mcp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description.workspace = true
 
 [[bin]]
 name = "wardline-mcp"

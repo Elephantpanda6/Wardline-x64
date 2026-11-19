@@ -102,17 +102,27 @@ fn probeLandlockAbi() c_int {
     return @intCast(signed);
 }
 
-fn probeUsernsEnabled() bool {
+fn readSysctlChar(path_z: [*:0]const u8) ?u8 {
     var flags: c.O = .{};
     flags.ACCMODE = .RDONLY;
     flags.CLOEXEC = true;
-    const fd = c.open("/proc/sys/kernel/unprivileged_userns_clone", flags);
-    if (fd < 0) return true; // Vanilla kernels without Debian/Ubuntu sysctl allow userns by default.
+    const fd = c.open(path_z, flags);
+    if (fd < 0) return null;
     defer _ = c.close(fd);
-    var b: [4]u8 = undefined;
+    var b: [1]u8 = undefined;
     const n = c.read(fd, &b, b.len);
-    if (n <= 0) return true;
-    return b[0] != '0';
+    if (n <= 0) return null;
+    return b[0];
+}
+
+fn probeUsernsEnabled() bool {
+    if (readSysctlChar("/proc/sys/user/max_user_namespaces") == '0') return false;
+    if (c.geteuid() != 0) {
+        if (readSysctlChar("/proc/sys/kernel/unprivileged_userns_clone") == '0') return false;
+        // Ubuntu 24.04 AppArmor blocks unprivileged writes to /proc/self/uid_map with EACCES.
+        if (readSysctlChar("/proc/sys/kernel/apparmor_restrict_unprivileged_userns") == '1') return false;
+    }
+    return true;
 }
 
 fn probeX64CetCpuinfo() u8 {
@@ -458,9 +468,11 @@ fn linuxPreExec(
         return .{};
     }
 
-    // L1: UserNS + NetNS + NO_NEW_PRIVS + Landlock + Seccomp
-    const ns_res = setupUserNamespace(ctx.parent_uid, ctx.parent_gid);
-    if (ns_res.status != .ok) return ns_res;
+    // L1: UserNS/NetNS when unprivileged userns mapping is permitted, plus NO_NEW_PRIVS + Landlock + Seccomp
+    if (probeUsernsEnabled()) {
+        const ns_res = setupUserNamespace(ctx.parent_uid, ctx.parent_gid);
+        if (ns_res.status != .ok) return ns_res;
+    }
 
     const rc_nnp = linux.prctl(@intCast(PR_SET_NO_NEW_PRIVS), 1, 0, 0, 0);
     const s_nnp: isize = @bitCast(rc_nnp);
@@ -530,7 +542,7 @@ export fn wl_probe_capabilities(out_caps: ?*common.WlHostCapabilities) callconv(
         cet = probeX64CetCpuinfo();
     }
 
-    const l1_ok = userns_ok and ll_abi >= 1;
+    const l1_ok = ll_abi >= 1;
     var tier_mask: u32 = common.WL_TIER_BIT_L0;
     if (l1_ok) tier_mask |= common.WL_TIER_BIT_L1;
     if (runsc_ok) tier_mask |= common.WL_TIER_BIT_L1_5;

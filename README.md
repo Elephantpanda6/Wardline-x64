@@ -1,10 +1,10 @@
 # Wardline (x86_64 / Cross-OS Edition)
 
-> **Fail-closed capability boundary, host-sealed secret vault, anti-SSRF egress broker, OS-native process sandbox, and tamper-evident audit ledger for autonomous agents across Windows, Linux, macOS, and FreeBSD (x64 & ARM64).**
+> **Multi-OS Zero-Trust Capability Broker, Host-Sealed Secret Vault, Anti-SSRF Egress Proxy, Kernel Process Sandbox (`L0`–`L2`, `C-ABI v2`), and Merkle Audit Runtime for `x86_64` across Windows, Linux, macOS, and FreeBSD.**
 
 [![Rust Workspace](https://img.shields.io/badge/Rust-14%20crates%20(12%2B1%20forbid%20unsafe)-orange)](#architecture-summary)
 [![Zig Native Engines](https://img.shields.io/badge/Zig-4%20OS%20Engines%20(C--ABI%20v2)-f7a41d)](#cross-os-platform-matrix)
-[![SDKs](https://img.shields.io/badge/SDKs-Python%20%7C%20TypeScript%20%7C%20Go%20%7C%20Rust-blue)](docs/CLI_AND_MCP.md#polyglot-client-sdks)
+[![SDKs](https://img.shields.io/badge/SDKs-Python%20%7C%20TypeScript%20%7C%20Go%20%7C%20Rust-blue)](docs/CLI_AND_MCP.md#3-polyglot-client-sdks)
 
 `Wardline-x64` is designed so **neither a compromised prompt/agent tool call nor a hostile child process** can touch plaintext credentials, execute shells or living-off-the-land binaries, traverse symlinks/junctions out of its workspace, silently downgrade sandbox isolation, dial host loopback/IMDS endpoints, or rewrite audit history.
 
