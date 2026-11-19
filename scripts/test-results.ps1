@@ -18,6 +18,17 @@ try {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     node --experimental-strip-types --test clients/ts/tests/client.test.ts
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $goCmd = Get-Command go -ErrorAction SilentlyContinue
+    $goExe = if ($goCmd) { $goCmd.Source } elseif (Test-Path "C:\Program Files\Go\bin\go.exe") { "C:\Program Files\Go\bin\go.exe" } else { $null }
+    if ($goExe) {
+        Push-Location clients/go/wardline
+        try {
+            & $goExe test -v ./...
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        } finally {
+            Pop-Location
+        }
+    }
     Write-Host "ALL VERIFICATION SUITES PASSED"
 } finally {
     Pop-Location

@@ -75,8 +75,8 @@ All tests, lints, release builds, polyglot SDK checks, and benchmarks below refl
 | SDK / Component | Windows x64 Status | WSL2 Ubuntu Linux x64 Status | Notes |
 |---|---|---|---|
 | **Python SDK** (`clients/python`) | **1/1 passed** (`unittest`) | **1/1 passed** (`unittest`) | Covers IPC `[u32 LE][JSON]` frame roundtrip & `ApprovalRequiredError` / `DeniedError` mapping |
-| **TypeScript SDK** (`clients/ts`) | **1/1 passed** (`node v24.18.1 --experimental-strip-types --test`) | Failed (`ERR_NO_TYPESCRIPT` on `node v22.22.1`) | Node 22.6+ / 24+ required to execute `.ts` directly without compilation |
-| **Rust SDK** (`clients/rust/wardline-client`) | **1/1 passed** (`cargo test`) | **1/1 passed** (`cargo test --offline`) | `#![forbid(unsafe_code)]`; verified IPC framing & typed error handling |
-| **Go SDK** (`clients/go/wardline`) | Not executed locally (`go` not installed) | Not executed locally (`go` not installed) | Verified structurally; run `go test ./...` in environments with Go `1.22+` |
+| **TypeScript SDK** (`clients/ts`) | **1/1 passed** (`node v24.18.1 --experimental-strip-types --test`) | **1/1 passed** (`node v24.18.1 --experimental-strip-types --test`) | Verified direct TypeScript test execution on Node `v24.18.1` on both Windows and Linux |
+| **Rust SDK** (`clients/rust/wardline-client`) | **1/1 passed** (`cargo test --offline`) | **1/1 passed** (`cargo test --offline`) | `#![forbid(unsafe_code)]`; verified IPC framing & typed error handling |
+| **Go SDK** (`clients/go/wardline`) | **1/1 passed** (`go1.27.4 windows/amd64`) | **1/1 passed** (`go1.26.8 linux/amd64`) | `TestIPCFrameAndCheckedResponse` passed; included in `scripts/test-results.ps1` (`ALL VERIFICATION SUITES PASSED`) & `.sh` |
 | **macOS & FreeBSD Runtime** | Cross-compiled Zig `.a` libraries only | Cross-compiled Zig `.a` libraries only | `macos-x64` Seatbelt & `freebsd-x64` Capsicum C engines compiled via `zig build all-engines`; live kernel tests require native Darwin / FreeBSD hosts |
 | **Fuzz Targets** (`fuzz/`) | Compiled/checked structure (`libfuzzer-sys`) | Not run locally (`cargo-fuzz` nightly fuzzer not invoked) | 7 libFuzzer harnesses + seed corpora staged in `fuzz/` |
